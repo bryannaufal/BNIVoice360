@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.streamlit/secrets.toml
+.venv/
+.pytest_cache/
+.ruff_cache/
+.devtools/
+
+# Local configuration and editor files
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+
+# Runtime databases and logs
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.log
