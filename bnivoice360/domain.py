@@ -26,15 +26,17 @@ class Prediction:
 class VoiceRecord:
     suara_nasabah_id: str
     content: str
-    date_posted: str
+    date_posted: str | None
     source: str
     sentiment: str | None = None
     is_IT: int | None = None
     is_Bisnis: int | None = None
     is_Operasional: int | None = None
     is_Urgent: int | None = None
-    is_escalated: int = 0
+    escalation_status: str = "Open"
     topic_cluster: str | None = None
+    topic_id: int | None = None
+    author_id_or_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,5 +76,5 @@ class OverviewMetrics:
     total_volume: int
     growth_percent: float
     net_sentiment: float
-    urgent_pending: int
+    urgent_open: int
     topic_count: int

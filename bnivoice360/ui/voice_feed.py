@@ -7,15 +7,24 @@ from math import ceil
 import pandas as pd
 import streamlit as st
 
-from bnivoice360.config import FEED_PAGE_SIZE
+from bnivoice360.config import ESCALATION_STATUSES, FEED_PAGE_SIZE
 from bnivoice360.data.repository import VoiceRepository
 from bnivoice360.services.analytics import category_labels, voice_feed
 from bnivoice360.ui.components import section_title
-from bnivoice360.ui.state import notify_and_rerun
 
 
 def _remember_search() -> None:
     st.session_state["voice_feed_search"] = st.session_state["issues_search"]
+
+
+def _update_status(record_id: str, repository: VoiceRepository, key: str) -> None:
+    status = st.session_state[key]
+    changed = repository.set_escalation_status(record_id, status)
+    st.session_state["escalation_notice"] = (
+        f"Status issue diperbarui menjadi {status}."
+        if changed
+        else "Status issue sudah sesuai atau tidak lagi tersedia."
+    )
 
 
 def _change_page(delta: int, page_count: int) -> None:
@@ -45,7 +54,7 @@ def _pagination(total: int, context: str) -> tuple[int, int]:
         end = min(page * FEED_PAGE_SIZE, total)
         st.markdown(
             f'<div class="feed-pagination-summary">Page <b>{page}</b> of <b>{page_count}</b>'
-            f"<span>{start}–{end} of {total} voices · urgent pending first</span></div>",
+            f"<span>{start}–{end} of {total} voices · urgent first · Escalated → Open → Resolved</span></div>",
             unsafe_allow_html=True,
         )
     following.button(
@@ -65,16 +74,17 @@ def _badge(label: object, style: str) -> str:
 
 def _metadata(row: pd.Series) -> str:
     posted = row["date_posted"]
-    date_label = posted.strftime("%d %b %Y, %H:%M") if pd.notna(posted) else "Unknown date"
+    date_label = posted.strftime("%d %b %Y, %H:%M:%S WIB") if pd.notna(posted) else "Unknown date"
     sentiment = row["sentiment"] if pd.notna(row["sentiment"]) else "Unlabeled"
     topic = row["topic_cluster"] if pd.notna(row["topic_cluster"]) else "Unlabeled"
     badges = [
+        _badge(row["source"], "topic"),
         _badge(sentiment, str(sentiment).lower()),
         _badge(topic, "topic"),
         *[_badge(category, category.lower()) for category in category_labels(row)],
     ]
     if row["is_Urgent"] == 1:
-        badges.append(_badge("Urgent", "urgent"))
+        badges.append(_badge("🚨 URGENT", "urgent"))
     return (
         f'<div class="voice-meta"><strong>{escape(str(row["source"]))}</strong>'
         f"<span>{date_label}</span></div>"
@@ -91,24 +101,20 @@ def _render_card(row: pd.Series, repository: VoiceRepository) -> None:
         with metadata:
             st.markdown(_metadata(row), unsafe_allow_html=True)
         with action:
-            if row["is_escalated"] == 1:
-                st.markdown(
-                    '<div class="voice-action-status">✓ Escalated</div>',
-                    unsafe_allow_html=True,
-                )
-            elif st.button("Escalate", key=f"esc_{record_id}", width="stretch"):
-                # Repository transactions commit before this rerun starts.
-                changed = repository.escalate(record_id)
-                message = (
-                    "Issue ditandai sebagai escalated."
-                    if changed
-                    else "Issue sudah dieskalasi atau tidak lagi tersedia."
-                )
-                notify_and_rerun("escalation_notice", message)
+            status = row["escalation_status"]
+            status_key = f"status_{record_id}"
+            st.session_state[status_key] = status
+            st.selectbox(
+                "Status",
+                ESCALATION_STATUSES,
+                key=status_key,
+                label_visibility="collapsed",
+                on_change=_update_status,
+                args=(record_id, repository, status_key),
+            )
         content = str(row["content"])
-        preview = content[:240] + ("…" if len(content) > 240 else "")
         st.markdown(
-            f'<div class="voice-content">{escape(preview)}</div>',
+            f'<div class="voice-content">{escape(content)}</div>',
             unsafe_allow_html=True,
         )
         with st.expander("Full text & details"):
@@ -116,6 +122,7 @@ def _render_card(row: pd.Series, repository: VoiceRepository) -> None:
             st.caption(
                 f"ID: {record_id} · Topic: {row['topic_cluster']} · "
                 f"Sentiment: {row['sentiment']} · "
+                f"Status: {row['escalation_status']} · "
                 f"Category: {', '.join(category_labels(row)) or 'Uncategorized'}"
             )
 
@@ -123,7 +130,7 @@ def _render_card(row: pd.Series, repository: VoiceRepository) -> None:
 def render_voice_feed(
     frame: pd.DataFrame, repository: VoiceRepository, filter_context: str = ""
 ) -> None:
-    section_title("Granular voice feed")
+    section_title("Suara Nasabah & Action Center")
     search = st.text_input(
         "Search customer voice",
         value=st.session_state.get("voice_feed_search", ""),

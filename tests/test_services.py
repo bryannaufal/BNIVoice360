@@ -72,7 +72,7 @@ def test_prediction_fills_partial_labels_without_overwriting_reviewed_fields(ser
                     "source": "X",
                     "sentiment": "Neutral",
                     "topic_cluster": "Reviewed topic",
-                    "is_escalated": 1,
+                    "escalation_status": "Escalated",
                 }
             ]
         )
@@ -84,7 +84,7 @@ def test_prediction_fills_partial_labels_without_overwriting_reviewed_fields(ser
     assert row["topic_cluster"] == "Reviewed topic"
     assert row["is_IT"] == 1
     assert row["is_Urgent"] == 1
-    assert row["is_escalated"] == 1
+    assert row["escalation_status"] == "Escalated"
     assert services.prediction.run("X") == 0
 
 
@@ -152,7 +152,7 @@ def issue_fixture(services):
                     "sentiment": "Negative",
                     "is_IT": 1,
                     "is_Urgent": 1,
-                    "is_escalated": 1,
+                    "escalation_status": "Escalated",
                     "topic_cluster": "Transfer",
                 },
             ]
@@ -168,7 +168,7 @@ def test_issue_filters_use_or_for_categories_and_and_for_other_dimensions(servic
         IssueFilters(
             sources=("X",),
             categories=("IT", "Bisnis"),
-            escalation_status="Pending Escalation",
+            escalation_status="Open",
             urgent_only=True,
         ),
     )
@@ -177,9 +177,9 @@ def test_issue_filters_use_or_for_categories_and_and_for_other_dimensions(servic
     assert filter_issues(frame, IssueFilters(categories=())).empty
 
 
-def test_feed_prioritizes_urgent_pending_and_search_is_literal(services):
+def test_feed_prioritizes_urgent_then_active_status_and_search_is_literal(services):
     frame = issue_fixture(services)
-    assert voice_feed(frame).iloc[0]["suara_nasabah_id"] == "urgent"
+    assert voice_feed(frame).iloc[0]["suara_nasabah_id"] == "escalated"
     searched = voice_feed(frame, "transfer.a")
     assert set(searched["suara_nasabah_id"]) == {"urgent", "escalated"}
 

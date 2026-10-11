@@ -30,7 +30,7 @@ def main() -> None:
     inject_css()
     try:
         services = create_services()
-    except (sqlite3.Error, OSError) as exc:
+    except (sqlite3.Error, OSError, ValueError) as exc:
         st.error(f"Database tidak dapat diinisialisasi: {exc}")
         st.stop()
     page = render_sidebar(services.repository, list(PAGES))

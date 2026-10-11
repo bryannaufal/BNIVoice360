@@ -123,6 +123,7 @@ def render_upload_panel(source: str, ingestion: IngestionService) -> None:
     st.caption(
         "Kolom wajib: content dan date_posted. "
         "Kolom source opsional karena akan dipetakan ke tab aktif."
+        " escalation_status opsional: Open, Escalated, atau Resolved (default Open)."
     )
     if uploaded is None:
         return

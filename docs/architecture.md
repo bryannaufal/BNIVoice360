@@ -34,10 +34,25 @@ extra dependencies and indirection.
 
 ## Database lifecycle
 
-`Database.initialize()` creates the existing `suara_nasabah` table if absent and
-adds source/date and urgency/escalation indexes. There is no table rename or
-destructive migration. `seed_if_empty()` serializes its empty check and insert in
-a transaction to prevent concurrent sessions from seeding twice.
+`Database.initialize()` creates `suara_nasabah` and `topic_detail`, with a nullable
+`topic_id` foreign key and indexes for source/date, urgency/escalation, and topics.
+Each connection enables foreign-key enforcement. Legacy single-table databases
+are backed up, then migrated transactionally, preserving voices and escalation.
+The status schema uses `escalation_status TEXT NOT NULL DEFAULT 'Open'` with a
+CHECK constraint permitting only Open, Escalated, and Resolved. Both single-table
+and two-table binary schemas migrate with a backup: 0 becomes Open, 1 becomes
+Escalated. Existing topic details, voice IDs, author information, and timestamps
+are retained; schema version is 3.
+The repository derives `topic_cluster` from the linked title when reading data.
+`NULL` is displayed as Unlabeled and `-1` as Outlier, irrespective of its CSV title.
+
+`data/seed.py` validates the three configured CSV sources and inserts topics and
+voices in one transaction. Empty databases initialize automatically unless
+`BNIVOICE360_AUTO_INITIALIZE=0`. Existing databases are always preserved on app
+startup. Only the initialization CLI consumes `BNIVOICE360_INIT_OVERWRITE` or
+`--overwrite`; it creates a SQLite backup before replacing data. An immediate
+write transaction serializes the final empty check and insertion across sessions.
+`data/demo.py` supplies deterministic fixtures for offline tests.
 
 Every repository operation opens a short-lived connection through
 `Database.transaction()`. Successful writes commit, exceptions roll back, and
@@ -48,7 +63,16 @@ Ingestion validates each incoming row before persistence. Duplicate primary keys
 are skipped with an explicit conflict clause; other database constraint failures
 roll back the batch. Enrichment performs classification outside the write
 transaction, then fills missing labels with `COALESCE`, preserving reviewed
-values. Escalation is a single idempotent update.
+values. Topic absence alone does not trigger enrichment. Predictions resolve
+titles to topic records only for voices with a null topic ID, preserving existing
+assignments and outliers. Escalation is a single idempotent update.
+
+Topic counts, rankings, category/topic charts, topic sentiment charts, and
+companion rankings use assigned topics only, excluding null IDs and `-1`.
+Overall volume, sentiment, urgency, and escalation metrics retain those voices.
+Issue Analytics provides separate assignment counts and empty states for filters
+matching only Outlier or Unlabeled records. Selecting all categories leaves
+uncategorized voices visible; an explicit category subset filters by its flags.
 
 Startup honors `BNIVOICE360_DB_PATH` through `Settings`. Tests supply a path in
 `tmp_path`; no production database is needed.
@@ -74,7 +98,24 @@ creating any row widgets. Non-widget session keys store pagination and search;
 filter callbacks copy selections into durable state so Streamlit's widget
 cleanup does not erase them on page navigation. A filter/search context resets
 the page only when criteria change, while data updates preserve or clamp it.
-Escalation commits through `VoiceRepository.escalate()` before a full app rerun.
+Each card has an inline status selectbox. Its callback commits through
+`VoiceRepository.set_escalation_status()` before Streamlit reruns and reloads the
+snapshot, allowing Open, Escalated, or Resolved. Resolved voices never enter
+urgent Open metrics. The feed sorts by urgency, then Escalated/Open/Resolved,
+then newest timestamp, preserving or clamping pagination after edits.
+
+`services/issues.py` supplies negative-only diagnostics independently of UI:
+topic catalogs keyed by IDs, top-five named topic tiles per category without tail aggregation,
+daily/weekly/monthly zero-filled bins, volume/peak topic selection, and channel
+and unit summaries. `pages/issues.py` keeps the existing filter/alert widgets and
+applies negative sentiment scope after filtering. Global analytics remain
+independent of the deep-dive selection. Treemap events and a selectbox share a
+durable topic ID; consumed selection signatures prevent old chart events from
+overriding manual choices on unrelated reruns. Only real topic leaves can select
+a topic. The None-free `all` selectbox option disables deep-dive and restores
+the full negative feed. Filter changes validate selected IDs and fall back to
+the highest-volume available topic. Duplicate titles display IDs to disambiguate
+them, and every unique topic remains available even when not in the treemap.
 Each card uses a keyed `st.container()` and `st.columns([4, 1])` header, with CSS
 scoped to those container keys.
 
@@ -137,6 +178,8 @@ and branch options affect its seed; it does not contact social platforms.
 
 - `test_repository.py`: initialization preserves records, escalation is
   idempotent, failed batches roll back, and connections close.
+- `test_initialization.py`: source validation, calendar-month escalation boundary,
+  null topics, outliers, backups, overwrite rollback, legacy migration, and safe startup.
 - `test_services.py`: validation, duplicate IDs, source mapping, timezone
   normalization, partial enrichment, adapter replacement, filters, sorting,
   aggregates, and companion query scopes.

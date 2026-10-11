@@ -103,6 +103,24 @@ html, body, [class*="css"] {
   font-weight: 800;
 }
 
+.st-key-issue_driver_metric [data-testid="stMetricValue"],
+.st-key-issue_status_metric [data-testid="stMetricValue"],
+.st-key-issue_channel_metric [data-testid="stMetricValue"],
+.st-key-issue_coverage_metric [data-testid="stMetricValue"],
+.st-key-issue_driver_metric [data-testid="stMetricValue"] *,
+.st-key-issue_status_metric [data-testid="stMetricValue"] *,
+.st-key-issue_channel_metric [data-testid="stMetricValue"] *,
+.st-key-issue_coverage_metric [data-testid="stMetricValue"] * {
+  font-size: 1.06rem;
+  line-height: 1.45;
+  white-space: normal !important;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
+}
+
 [data-testid="stMetricLabel"],
 [data-testid="stMetricLabel"] [data-testid="stMarkdownContainer"] {
   color: #384C55;
@@ -264,10 +282,7 @@ div[class*="st-key-voice_card_"] [data-testid="stExpander"] summary {
   color: #22313F;
   font-size: 0.9rem;
   line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  display: block;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   margin: 0.5rem 0 0.4rem;

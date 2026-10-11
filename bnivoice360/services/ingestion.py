@@ -4,7 +4,7 @@ import uuid
 
 import pandas as pd
 
-from bnivoice360.config import SENTIMENTS, SOURCES
+from bnivoice360.config import ESCALATION_STATUSES, SENTIMENTS, SOURCES
 from bnivoice360.data.repository import VoiceRepository
 from bnivoice360.domain import IngestionResult, VoiceRecord
 
@@ -22,9 +22,9 @@ def binary_flag(value: object, default: int | None = None) -> int | None:
     try:
         number = float(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError("Category, urgency, and escalation flags must be 0 or 1.") from exc
+        raise ValueError("Category and urgency flags must be 0 or 1.") from exc
     if number not in (0, 1):
-        raise ValueError("Category, urgency, and escalation flags must be 0 or 1.")
+        raise ValueError("Category and urgency flags must be 0 or 1.")
     return int(number)
 
 
@@ -47,9 +47,13 @@ class IngestionService:
         self.validate_columns(frame, forced_source)
         records: list[VoiceRecord] = []
         errors: list[str] = []
+        topic_ids = self.repository.topic_ids()
         for position, (_, row) in enumerate(frame.iterrows(), start=2):
             try:
-                records.append(self._normalize_row(row, forced_source))
+                record = self._normalize_row(row, forced_source)
+                if record.topic_id is not None and record.topic_id not in topic_ids:
+                    raise ValueError(f"Unknown topic_id: {record.topic_id}")
+                records.append(record)
             except ValueError as exc:
                 errors.append(f"CSV row {position}: {exc}")
         inserted, duplicates = self.repository.insert(records)
@@ -69,9 +73,22 @@ class IngestionService:
         source = forced_source or nullable_text(row.get("source"))
         if source not in SOURCES:
             raise ValueError(f"Unknown source: {source}")
+        topic_text = nullable_text(row.get("topic_id"))
+        topic_id = None
+        if topic_text is not None:
+            try:
+                number = float(topic_text)
+                if not number.is_integer():
+                    raise ValueError
+                topic_id = int(number)
+            except (ValueError, OverflowError) as exc:
+                raise ValueError("topic_id must be an integer.") from exc
         sentiment = nullable_text(row.get("sentiment"))
         if sentiment is not None and sentiment not in SENTIMENTS:
             raise ValueError(f"Unknown sentiment: {sentiment}")
+        status = nullable_text(row.get("escalation_status")) or "Open"
+        if status not in ESCALATION_STATUSES:
+            raise ValueError("escalation_status must be Open, Escalated, or Resolved.")
         return VoiceRecord(
             suara_nasabah_id=nullable_text(row.get("suara_nasabah_id"))
             or f"VOC-{uuid.uuid4().hex[:12].upper()}",
@@ -83,6 +100,8 @@ class IngestionService:
             is_Bisnis=binary_flag(row.get("is_Bisnis")),
             is_Operasional=binary_flag(row.get("is_Operasional")),
             is_Urgent=binary_flag(row.get("is_Urgent")),
-            is_escalated=binary_flag(row.get("is_escalated"), 0),
+            escalation_status=status,
             topic_cluster=nullable_text(row.get("topic_cluster")),
+            topic_id=topic_id,
+            author_id_or_name=nullable_text(row.get("author_id_or_name")),
         )

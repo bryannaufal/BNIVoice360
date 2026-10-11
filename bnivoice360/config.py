@@ -16,6 +16,7 @@ SOURCES = (
     "Laporan Nasabah",
 )
 SENTIMENTS = ("Negative", "Neutral", "Positive")
+ESCALATION_STATUSES = ("Open", "Escalated", "Resolved")
 CATEGORY_COLUMNS = {
     "IT": "is_IT",
     "Bisnis": "is_Bisnis",
@@ -27,7 +28,6 @@ PREDICTION_COLUMNS = (
     "is_Bisnis",
     "is_Operasional",
     "is_Urgent",
-    "topic_cluster",
 )
 FEED_PAGE_SIZE = 12
 
@@ -43,4 +43,28 @@ class Settings:
             .resolve()
         )
     )
-    seed_demo_data: bool = True
+    seed_initial_data: bool = field(
+        default_factory=lambda: os.environ.get("BNIVOICE360_AUTO_INITIALIZE", "1") == "1"
+    )
+    # Consumed by the initialization CLI only, never by Streamlit startup.
+    overwrite_initialization: bool = field(
+        default_factory=lambda: os.environ.get("BNIVOICE360_INIT_OVERWRITE", "0") == "1"
+    )
+    voice_csv: str = field(
+        default_factory=lambda: os.environ.get(
+            "BNIVOICE360_VOICE_CSV",
+            "https://docs.google.com/spreadsheets/d/17EZg4weh8Xw8ggoogYxt7f19QXaSKFaUhzSoXEm2050/gviz/tq?tqx=out:csv&sheet=df_Clean",
+        )
+    )
+    topic_csv: str = field(
+        default_factory=lambda: os.environ.get(
+            "BNIVOICE360_TOPIC_CSV",
+            "https://drive.google.com/uc?export=download&id=1WacFf0Q0-jk8tCYTjE_T8w115thxmwPq",
+        )
+    )
+    mapping_csv: str = field(
+        default_factory=lambda: os.environ.get(
+            "BNIVOICE360_MAPPING_CSV",
+            "https://drive.google.com/uc?export=download&id=1l-7710H8kP5oWg8dWMFnui48-7aiSsrt",
+        )
+    )

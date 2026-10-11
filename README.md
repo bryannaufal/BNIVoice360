@@ -9,7 +9,7 @@ This project is a local demo: the role selector is not authentication, crawling 
 - Python 3.10 or newer
 - Git installed on your system
 - Windows PowerShell (the commands below are written for Windows)
-- Internet access only while cloning the repository and installing Python packages
+- Internet access for installing packages and the first Google CSV initialization
 
 ## 2. Clone, install and run
 
@@ -39,7 +39,38 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 Streamlit opens the dashboard at <http://localhost:8501>. Keep the terminal running while using the app. Press `Ctrl+C` in that terminal to stop it.
 
-On first startup, the app creates `bnivoice360.db` and inserts 96 demo records only when the database table is empty. This database is intentionally ignored by Git because it is local runtime data.
+On first startup, the app creates `bnivoice360.db` and initializes an empty database from the configured Google CSV exports. Existing data is preserved. This database is intentionally ignored by Git because it contains local runtime data.
+
+### Initialize or overwrite the database
+
+The database has two tables: `suara_nasabah` and `topic_detail`. Voice records have a nullable foreign key to topic details. No assignment means Unlabeled (`NULL`); topic ID `-1` means Outlier. Outlier and Unlabeled voices remain in overall metrics and the feed, but are excluded from topic counts, rankings, and topic charts. Issue Analytics displays their counts separately and allows filtering each group.
+
+The default sources are the `df_Clean` Google Sheet, topic descriptions, and document-to-topic map supplied for this project. Google files must be accessible as CSV downloads. Local CSV paths can also be supplied through `BNIVOICE360_VOICE_CSV`, `BNIVOICE360_TOPIC_CSV`, and `BNIVOICE360_MAPPING_CSV`. `Internal_CRM` becomes `Laporan Nasabah`; `Netral` becomes `Neutral`. Author identifiers are preserved. List-like topic fields are retained as CSV text.
+
+Choose whether to replace existing data with this configuration:
+
+```powershell
+# 0 = preserve existing voices (default); 1 = replace with the new initialization
+$env:BNIVOICE360_INIT_OVERWRITE = "0"
+python -m bnivoice360.data.seed
+```
+
+For a fresh initialization, stop Streamlit first, then run:
+
+```powershell
+$env:BNIVOICE360_INIT_OVERWRITE = "1"
+python -m bnivoice360.data.seed
+$env:BNIVOICE360_INIT_OVERWRITE = "0"
+streamlit run app.py
+```
+
+`--overwrite` and `--preserve` override the environment setting for one command. Overwrite validates all sources first, backs up the existing database to `bnivoice360.backup-<timestamp>.db`, then replaces both tables' data in one transaction. A failed import rolls back. Preserve mode skips downloading when voices already exist. The overwrite setting is used **only by this command**, never by Streamlit startup, so reruns cannot reset data. Legacy single-table databases are migrated with a backup while retaining their records and escalation values.
+
+For offline startup or a deliberately empty database, set `$env:BNIVOICE360_AUTO_INITIALIZE = "0"`. Set it to `"1"` (default) to initialize empty databases automatically. Disable automatic initialization after intentionally removing all voices if you want the database to remain empty.
+
+Seeding sets `escalation_status = "Escalated"` for records before one calendar month prior to initialization in Jakarta time, and `"Open"` at or after the cutoff. Undated source rows are retained with a null posting date and status `"Escalated"`; the command reports their count. Nonempty invalid dates fail validation. Use `--as-of "2026-10-11"` to reproduce a cutoff of September 11, 2026. Later startups preserve status changes, including `"Resolved"`. Date filters exclude undated voices; overall metrics still include them.
+
+The status field accepts exactly `Open`, `Escalated`, or `Resolved`, defaults to `Open`, and is enforced by SQLite. Existing databases are backed up and migrated automatically: the former binary field maps `0` to `Open` and `1` to `Escalated`, preserving topic links and author information.
 
 To try a separate database without touching the default one:
 
@@ -55,9 +86,17 @@ Use the role selector in the sidebar:
 - **Manager / Executive**: overview, issue analytics, voice feed, graph, and companion pages.
 - **Data Admin**: everything above plus CSV upload, source selection, demo crawler, and enrichment actions.
 
-The **Issue Analytics & Voice Feed** page displays compact cards. Use search, filters, and page buttons to find feedback. Clicking **Escalate** saves the change to SQLite immediately and refreshes the page.
+The **Issue Analytics & Voice Feed** page focuses on **Negative** feedback. Its four KPIs show assigned negative issue volume, urgent Open cases awaiting triage, urgent Escalated cases under investigation, and the largest assigned negative topic. The existing filters and alert remain available; a filter excluding Negative produces an empty issue view. Outlier and Unlabeled counts appear separately and never drive topic rankings.
 
-For CSV ingestion, the required columns are `content` and `date_posted`. The selected source in the sidebar supplies `source`; mixed-source files may include their own `source` column. Dates should be parseable by pandas, and sentiment must be one of the values accepted by the validation message.
+The category treemap shows only the five largest named negative topics per unit, without an aggregated long-tail tile. All remaining topics stay accessible through the deep-dive dropdown and Voice Feed. The adjacent global trend plots the union of four topics by total volume and two by peak volume in the active time bins, with no aggregated Lainnya line. Both charts are 400px tall. Inclusive date ranges use daily bins for up to 30 days, weekly bins for 31–90 days, and monthly bins above 90 days. Weeks start on Monday and months start on the first; partial edge intervals include only records within the selected date range. Missing intervals display zero counts.
+
+Click a treemap topic or use **Pilih Topik untuk Deep-Dive** to inspect its volume, status counts, dominant channel, unit coverage, isolated trend, source breakdown, and department overlap. The largest topic is selected initially; selection persists across navigation and falls back to the largest available topic if filtering removes it. Category nodes do not select a topic. Choose **Semua isu (tanpa deep-dive)** to see the globally filtered negative feed, including Outlier and Unlabeled records. Channel names reflect stored source data. Unit involvement is multi-label, so percentages can exceed 100% in total.
+
+The **Suara Nasabah & Action Center** feed displays full escaped customer quotes, exact Jakarta timestamps, topic/source/unit badges, urgency, and an inline **Open / Escalated / Resolved** status dropdown. Status changes save immediately and re-sort the feed: urgent voices first, then Escalated, Open, Resolved within each urgency group, then newest submissions. Status and topic filters may remove a changed voice from the current view; pagination is preserved or clamped as needed. Only urgent Open voices contribute to the alert and the Home **Urgent Open** metric. Resolved records remain in historical analytics and the feed.
+
+Native treemap selection requires Streamlit 1.55 or newer, reflected in `requirements.txt` ([Streamlit release notes](https://docs.streamlit.io/develop/quick-reference/release-notes/2026)).
+
+For CSV ingestion, the required columns are `content` and `date_posted`. The selected source in the sidebar supplies `source`; mixed-source files may include their own `source` column. Dates should be parseable by pandas, and sentiment must be one of the values accepted by the validation message. Optional `escalation_status` accepts `Open`, `Escalated`, or `Resolved`; blank or missing values default to `Open`. Unknown statuses are rejected during validation. Enrichment preserves status. Companion queries support Open, Escalated, Resolved, and unresolved (Open plus Escalated).
 
 ## 4. Project map
 
@@ -67,7 +106,7 @@ bnivoice360/application.py   # Starts the app and registers pages
 bnivoice360/container.py     # Builds shared database/services
 bnivoice360/config.py        # Settings and business constants
 bnivoice360/domain.py        # Typed domain models
-bnivoice360/data/            # SQLite schema, queries, and demo seed data
+bnivoice360/data/            # SQLite schema, queries, and CSV initialization
 bnivoice360/services/        # Analytics, ingestion, crawler, and companion logic
 bnivoice360/pages/           # One rendering module per dashboard page
 bnivoice360/ui/              # Reusable widgets, charts, filters, and CSS
@@ -111,6 +150,6 @@ Before committing, check that local databases, `.venv`, caches, and secrets are 
 - **`ModuleNotFoundError`**: activate `.venv`, then run `python -m pip install -r requirements.txt` again.
 - **Port 8501 is busy**: run `streamlit run app.py --server.port 8502` and open <http://localhost:8502>.
 - **The page looks stale**: stop Streamlit with `Ctrl+C` and start it again.
-- **You need fresh demo data**: point `BNIVOICE360_DB_PATH` to a new filename rather than deleting the existing database.
+- **You need fresh source data**: stop Streamlit and run `python -m bnivoice360.data.seed --overwrite`; the command creates a database backup.
 
 For architecture details and extension recipes, read [docs/architecture.md](docs/architecture.md). For team conventions, read [CONTRIBUTING.md](CONTRIBUTING.md).

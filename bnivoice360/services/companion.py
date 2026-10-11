@@ -7,7 +7,7 @@ import pandas as pd
 
 from bnivoice360.config import SOURCES
 from bnivoice360.data.repository import VoiceRepository
-from bnivoice360.services.analytics import pending_urgent_count
+from bnivoice360.services.analytics import assigned_topics, open_urgent_count
 
 TOPIC_TERMS = {
     "mobile banking": "Login Aplikasi",
@@ -38,8 +38,15 @@ def _question_scope(question: str, frame: pd.DataFrame, now: pd.Timestamp) -> pd
         subset = subset[subset["is_Urgent"].eq(1)]
     if "it" in re.findall(r"\b\w+\b", query):
         subset = subset[subset["is_IT"].eq(1)]
-    if any(term in query for term in ("pending", "belum", "unresolved")):
-        subset = subset[subset["is_escalated"].eq(0)]
+    words = set(re.findall(r"\b\w+\b", query))
+    if "unresolved" in words or "belum selesai" in query or "belum resolved" in query:
+        subset = subset[subset["escalation_status"].ne("Resolved")]
+    elif "resolved" in words or "selesai" in words:
+        subset = subset[subset["escalation_status"].eq("Resolved")]
+    elif words & {"pending", "belum", "open"}:
+        subset = subset[subset["escalation_status"].eq("Open")]
+    elif words & {"escalated", "dieskalasi"}:
+        subset = subset[subset["escalation_status"].eq("Escalated")]
     if "negative" in query or "negatif" in query:
         subset = subset[subset["sentiment"].eq("Negative")]
     return subset
@@ -53,13 +60,13 @@ def answer_question(question: str, frame: pd.DataFrame, now: pd.Timestamp | None
         negative = int(subset["sentiment"].eq("Negative").sum())
         return (
             f"Terdapat **{len(subset)} voice** yang sesuai. Dari jumlah itu, "
-            f"**{negative} negatif** dan **{pending_urgent_count(subset)} "
-            "urgent belum dieskalasi**."
+            f"**{negative} negatif** dan **{open_urgent_count(subset)} "
+            "urgent berstatus Open**."
         )
     if "top" in query or "teratas" in query:
         match = re.search(r"(?:top|teratas)\s*(\d+)", query)
         limit = min(int(match.group(1)), 20) if match else 3
-        top = subset.groupby("topic_cluster").size().nlargest(limit)
+        top = assigned_topics(subset).groupby("topic_cluster").size().nlargest(limit)
         if top.empty:
             return "Belum ada data yang sesuai dengan cakupan pertanyaan tersebut."
         lines = [
@@ -73,15 +80,18 @@ def answer_question(question: str, frame: pd.DataFrame, now: pd.Timestamp | None
             "hilangkan salah satu filter dalam pertanyaan."
         )
     distribution = subset["sentiment"].value_counts()
-    top = subset["topic_cluster"].value_counts().head(3)
-    themes = ", ".join(f"**{topic}** ({count})" for topic, count in top.items())
+    top = assigned_topics(subset)["topic_cluster"].value_counts().head(3)
+    themes = (
+        ", ".join(f"**{topic}** ({count})" for topic, count in top.items())
+        or "Belum ada topik teridentifikasi"
+    )
     return (
         f"Saya menemukan **{len(subset)} voice**. Sentimennya: "
         f"**{distribution.get('Positive', 0)} positif**, "
         f"**{distribution.get('Neutral', 0)} netral**, dan "
         f"**{distribution.get('Negative', 0)} negatif**. "
         f"Tema dominan: {themes}. "
-        f"Ada **{pending_urgent_count(subset)}** isu urgent yang masih menunggu eskalasi."
+        f"Ada **{open_urgent_count(subset)}** isu urgent berstatus Open."
     )
 
 

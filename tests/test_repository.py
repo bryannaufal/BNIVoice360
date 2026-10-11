@@ -7,12 +7,14 @@ import pytest
 
 from bnivoice360.config import Settings
 from bnivoice360.container import create_services
+from bnivoice360.data.demo import seed_records
 from bnivoice360.domain import VoiceRecord
 
 
 def test_initialization_preserves_existing_data(tmp_path):
     settings = Settings(tmp_path / "voices.db")
     first = create_services(settings)
+    first.repository.seed_if_empty(seed_records())
     frame = first.repository.load()
     assert len(frame) == 96
     assert frame["source"].nunique() == 8
@@ -22,7 +24,7 @@ def test_initialization_preserves_existing_data(tmp_path):
     second = create_services(settings)
     reloaded = second.repository.load().set_index("suara_nasabah_id")
     assert len(reloaded) == 96
-    assert reloaded.loc[record_id, "is_escalated"] == 1
+    assert reloaded.loc[record_id, "escalation_status"] == "Escalated"
 
 
 def test_escalation_is_persistent_and_idempotent(services):
@@ -41,7 +43,7 @@ def test_escalation_is_persistent_and_idempotent(services):
     assert services.repository.escalate("one") is True
     assert services.repository.escalate("one") is False
     assert services.repository.escalate("missing") is False
-    assert services.repository.load().iloc[0]["is_escalated"] == 1
+    assert services.repository.load().iloc[0]["escalation_status"] == "Escalated"
 
 
 def test_failed_batch_rolls_back_previous_rows(services):

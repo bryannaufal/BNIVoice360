@@ -20,7 +20,7 @@ def section_title(title: str) -> None:
 def urgent_alert(count: int) -> None:
     if count:
         st.markdown(
-            f'<div class="alert"><b>⚠ {count} critical voice(s) belum dieskalasi.</b>'
+            f'<div class="alert"><b>⚠ {count} critical voice(s) berstatus Open.</b>'
             "<br>Prioritaskan pemeriksaan pada voice feed di bawah.</div>",
             unsafe_allow_html=True,
         )

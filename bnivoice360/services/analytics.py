@@ -4,12 +4,32 @@ from datetime import timedelta
 
 import pandas as pd
 
-from bnivoice360.config import CATEGORY_COLUMNS
+from bnivoice360.config import CATEGORY_COLUMNS, ESCALATION_STATUSES
 from bnivoice360.domain import IssueFilters, OverviewMetrics
 
 
-def pending_urgent_count(frame: pd.DataFrame) -> int:
-    return int((frame["is_Urgent"].eq(1) & frame["is_escalated"].eq(0)).sum())
+def open_urgent_count(frame: pd.DataFrame) -> int:
+    return int((frame["is_Urgent"].eq(1) & frame["escalation_status"].eq("Open")).sum())
+
+
+def assigned_topics(frame: pd.DataFrame) -> pd.DataFrame:
+    """Outliers and unmapped voices contribute to totals, never topic rankings."""
+    if "topic_id" in frame.columns:
+        ids = pd.to_numeric(frame["topic_id"], errors="coerce")
+        return frame.loc[ids.notna() & ids.ne(-1)]
+    return frame.loc[
+        frame["topic_cluster"].notna()
+        & ~frame["topic_cluster"].isin(["Outlier", "Unlabeled", "out;ier"])
+    ]
+
+
+def topic_assignment_counts(frame: pd.DataFrame) -> dict[str, int]:
+    ids = pd.to_numeric(frame["topic_id"], errors="coerce")
+    return {
+        "assigned": int((ids.notna() & ids.ne(-1)).sum()),
+        "outlier": int(ids.eq(-1).sum()),
+        "unlabeled": int(ids.isna().sum()),
+    }
 
 
 def overview_metrics(frame: pd.DataFrame, now: pd.Timestamp | None = None) -> OverviewMetrics:
@@ -32,8 +52,10 @@ def overview_metrics(frame: pd.DataFrame, now: pd.Timestamp | None = None) -> Ov
         len(frame),
         growth,
         net,
-        pending_urgent_count(frame),
-        int(frame["topic_cluster"].nunique()),
+        open_urgent_count(frame),
+        int(
+            assigned_topics(frame)["topic_id" if "topic_id" in frame else "topic_cluster"].nunique()
+        ),
     )
 
 
@@ -52,7 +74,8 @@ def sentiment_trend(frame: pd.DataFrame) -> pd.DataFrame:
 
 def top_topics(frame: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
     return (
-        frame.groupby("topic_cluster")
+        assigned_topics(frame)
+        .groupby("topic_cluster")
         .agg(
             Volume=("content", "size"),
             Negative=("sentiment", lambda values: values.eq("Negative").mean()),
@@ -67,6 +90,9 @@ def category_labels(row: pd.Series) -> list[str]:
 
 
 def category_topics(frame: pd.DataFrame) -> pd.DataFrame:
+    frame = assigned_topics(frame)
+    if frame.empty:
+        return pd.DataFrame(columns=["Category", "Topic", "Volume"])
     expanded = frame.assign(Category=frame.apply(category_labels, axis=1)).explode("Category")
     return (
         expanded.dropna(subset=["Category", "topic_cluster"])
@@ -78,7 +104,12 @@ def category_topics(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def topic_sentiments(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.groupby(["topic_cluster", "sentiment"]).size().reset_index(name="Volume")
+    return (
+        assigned_topics(frame)
+        .groupby(["topic_cluster", "sentiment"])
+        .size()
+        .reset_index(name="Volume")
+    )
 
 
 def filter_issues(frame: pd.DataFrame, filters: IssueFilters) -> pd.DataFrame:
@@ -94,11 +125,13 @@ def filter_issues(frame: pd.DataFrame, filters: IssueFilters) -> pd.DataFrame:
         column = CATEGORY_COLUMNS.get(category)
         if column:
             category_mask |= frame[column].eq(1)
-    mask &= category_mask
-    if filters.escalation_status == "Pending Escalation":
-        mask &= frame["is_escalated"].eq(0)
-    elif filters.escalation_status == "Escalated":
-        mask &= frame["is_escalated"].eq(1)
+    # Selecting every category means no category restriction, including all-zero voices.
+    if set(filters.categories) != set(CATEGORY_COLUMNS):
+        mask &= category_mask
+    if filters.escalation_status in ESCALATION_STATUSES:
+        mask &= frame["escalation_status"].eq(filters.escalation_status)
+    elif filters.escalation_status != "All":
+        raise ValueError("Unknown escalation status filter.")
     if filters.urgent_only:
         mask &= frame["is_Urgent"].eq(1)
     return frame.loc[mask].copy()
@@ -111,5 +144,10 @@ def voice_feed(frame: pd.DataFrame, search: str = "") -> pd.DataFrame:
         else frame
     )
     return result.assign(
-        priority=(result["is_Urgent"].eq(1) & result["is_escalated"].eq(0)).astype(int)
-    ).sort_values(["priority", "date_posted"], ascending=[False, False])
+        priority=result["is_Urgent"].eq(1).astype(int),
+        status_priority=result["escalation_status"].map({"Escalated": 0, "Open": 1, "Resolved": 2}),
+    ).sort_values(
+        ["priority", "status_priority", "date_posted"],
+        ascending=[False, True, False],
+        kind="stable",
+    )

@@ -23,9 +23,7 @@ def render(services: AppServices) -> None:
         f"{metrics.growth_percent:+.1f}% · 30d change",
     )
     columns[1].metric("Net Sentiment Score", f"{metrics.net_sentiment:+.1f}", "Positive − Negative")
-    columns[2].metric(
-        "Urgent Pending", metrics.urgent_pending, "Perlu intervensi", delta_color="inverse"
-    )
+    columns[2].metric("Urgent Open", metrics.urgent_open, "Perlu intervensi", delta_color="inverse")
     columns[3].metric("Topic Clusters", metrics.topic_count, "Tema terdeteksi")
     if frame.empty:
         st.info("Belum ada data VoC. Data Admin dapat mengimpor data di Data Ingestion.")

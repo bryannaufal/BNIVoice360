@@ -7,6 +7,8 @@ from bnivoice360.container import create_services
 def navigate(app, title):
     app.sidebar.radio(key="current_page").set_value(title).run()
     assert not app.exception
+    if title == "Issue Analytics & Voice Feed":
+        app.selectbox(key="issues_deep_dive_topic").set_value("all").run()
 
 
 def test_every_page_renders_and_roles_hide_admin_navigation(streamlit_app):
@@ -53,13 +55,17 @@ def test_crawl_save_predict_updates_data_and_clears_saved_preview(streamlit_app,
 def test_escalation_button_persists_state(streamlit_app, tmp_path):
     app = streamlit_app
     navigate(app, "Issue Analytics & Voice Feed")
-    action = next(button for button in app.button if button.label == "Escalate")
-    record_id = action.key.removeprefix("esc_")
-    action.click().run()
+    action = next(
+        widget
+        for widget in app.selectbox
+        if widget.key.startswith("status_") and widget.value == "Open"
+    )
+    record_id = action.key.removeprefix("status_")
+    action.set_value("Escalated").run()
     assert not app.exception
     services = create_services(Settings(tmp_path / "ui.db"))
     data = services.repository.load().set_index("suara_nasabah_id")
-    assert data.loc[record_id, "is_escalated"] == 1
+    assert data.loc[record_id, "escalation_status"] == "Escalated"
 
 
 def test_companion_chat_history_survives_navigation(streamlit_app):

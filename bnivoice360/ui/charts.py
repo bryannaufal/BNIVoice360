@@ -209,3 +209,122 @@ def topic_sentiment_distribution(data: pd.DataFrame) -> go.Figure:
     figure.update_xaxes(title="Voice volume", rangemode="tozero")
     figure.update_layout(margin=dict(b=85))
     return figure
+
+
+def issue_topic_treemap(data: pd.DataFrame) -> go.Figure:
+    ids, labels, parents, values, custom, colors = [], [], [], [], [], []
+    for category, tiles in data.groupby("Category", sort=False):
+        root = f"unit:{category}"
+        ids.append(root)
+        labels.append(category)
+        parents.append("")
+        values.append(int(tiles["Volume"].sum()))
+        custom.append([None, "category"])
+        colors.append(CATEGORY_COLORS[category])
+        for position, (_, tile) in enumerate(tiles.iterrows()):
+            ids.append(f"{root}/tile:{position}")
+            labels.append(tile["Topic"])
+            parents.append(root)
+            values.append(int(tile["Volume"]))
+            custom.append(
+                [int(tile["topic_id"]) if tile["kind"] == "topic" else None, tile["kind"]]
+            )
+            colors.append(CATEGORY_COLORS[category])
+    figure = go.Figure(
+        go.Treemap(
+            ids=ids,
+            labels=labels,
+            parents=parents,
+            values=values,
+            customdata=custom,
+            text=[_wrap_label(label, 26) for label in labels],
+            texttemplate="%{text}<br><b>%{value:,}</b>",
+            branchvalues="total",
+            marker=dict(colors=colors, line=dict(color="#FFFFFF", width=2)),
+            hovertemplate="%{label}<br>%{value:,} issue voices<extra></extra>",
+            textfont=dict(color=TEXT_COLOR, size=12),
+            insidetextfont=dict(color=TEXT_COLOR),
+            outsidetextfont=dict(color=TEXT_COLOR),
+            pathbar=dict(visible=False),
+        )
+    )
+    style_figure(figure, 400)
+    figure.update_layout(title="Category → Topic map", margin=dict(l=8, r=8, t=55, b=8))
+    return figure
+
+
+def topic_trend(data: pd.DataFrame, title: str, binning: str) -> go.Figure:
+    figure = go.Figure()
+    for topic_id, rows in data.groupby("topic_id", sort=False):
+        label = rows.iloc[0]["Topic"]
+        figure.add_trace(
+            go.Scatter(
+                x=rows["Date"],
+                y=rows["Volume"],
+                mode="lines+markers",
+                name=textwrap.shorten(label, width=38, placeholder="…"),
+                customdata=[[label]] * len(rows),
+                line=dict(color=TOPIC_COLORS[int(topic_id) % len(TOPIC_COLORS)], width=2.5),
+                marker=dict(size=5),
+                hovertemplate="%{customdata[0]}: %{y:,}<extra></extra>",
+            )
+        )
+    style_figure(figure, 400)
+    figure.update_layout(
+        title=title,
+        hovermode="x unified",
+        margin=dict(l=25, r=16, t=55, b=110),
+        legend=dict(y=-0.22, font=dict(size=10)),
+    )
+    figure.update_xaxes(
+        title=f"{binning} intervals",
+        nticks=6,
+        tickformat="%b %Y" if binning == "Monthly" else "%d %b",
+    )
+    figure.update_yaxes(
+        title="Issue voices", rangemode="tozero", dtick=1 if data["Volume"].max() <= 5 else None
+    )
+    return figure
+
+
+def issue_channel_breakdown(data: pd.DataFrame) -> go.Figure:
+    figure = px.bar(
+        data.sort_values("Volume"),
+        x="Volume",
+        y="source",
+        orientation="h",
+        title="Source channel breakdown",
+        color_discrete_sequence=[TOPIC_COLORS[0]],
+    )
+    style_figure(figure, 250)
+    figure.update_layout(margin=dict(l=16, r=16, t=55, b=40), showlegend=False)
+    figure.update_xaxes(title="Issue voices", rangemode="tozero")
+    figure.update_yaxes(title=None)
+    return figure
+
+
+def department_overlap(data: pd.DataFrame) -> go.Figure:
+    figure = px.bar(
+        data,
+        x="Percent",
+        y="Department",
+        orientation="h",
+        color="Department",
+        color_discrete_map={
+            "IT": TOPIC_COLORS[2],
+            "Bisnis": TOPIC_COLORS[3],
+            "Operasional": TOPIC_COLORS[1],
+        },
+        title="Department involvement",
+        text="Percent",
+    )
+    style_figure(figure, 230)
+    figure.update_layout(margin=dict(l=16, r=30, t=55, b=40), showlegend=False)
+    figure.update_traces(
+        texttemplate="%{x:.0f}%",
+        textposition="outside",
+        hovertemplate="%{y}: %{x:.1f}% of topic voices<extra></extra>",
+    )
+    figure.update_xaxes(title="Share of topic voices (%)", range=[0, 110], ticksuffix="%")
+    figure.update_yaxes(title=None)
+    return figure

@@ -3,7 +3,7 @@
 import pandas as pd
 import streamlit as st
 
-from bnivoice360.config import CATEGORY_COLUMNS, SENTIMENTS, SOURCES
+from bnivoice360.config import CATEGORY_COLUMNS, ESCALATION_STATUSES, SENTIMENTS, SOURCES
 from bnivoice360.domain import IssueFilters
 from bnivoice360.ui.components import section_title
 
@@ -65,12 +65,17 @@ def render_issue_filters(frame: pd.DataFrame) -> IssueFilters:
         on_change=_remember_filter,
         args=("issues_categories",),
     )
+    status_options = ["All", *ESCALATION_STATUSES]
+    saved_status = saved.get("issues_escalation", "All")
+    if saved_status == "Pending Escalation":
+        saved_status = "Open"
+        saved["issues_escalation"] = saved_status
+    if st.session_state.get("issues_escalation") == "Pending Escalation":
+        st.session_state["issues_escalation"] = "Open"
     escalation = right.selectbox(
         "Escalation status",
-        ["All", "Pending Escalation", "Escalated"],
-        index=["All", "Pending Escalation", "Escalated"].index(
-            saved.get("issues_escalation", "All")
-        ),
+        status_options,
+        index=status_options.index(saved_status) if saved_status in status_options else 0,
         key="issues_escalation",
         on_change=_remember_filter,
         args=("issues_escalation",),
