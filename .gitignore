@@ -22,3 +22,6 @@ __pycache__/
 .initialization/
 .embeddings/
 .notebooks/
+notebooks/01_ner_experiment_colab.ipynb
+notebooks/02_pii_masking_export_colab.ipynb
+notebooks/test_groq.ipynb
