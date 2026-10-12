@@ -115,25 +115,37 @@ def _topic_axis(figure: go.Figure, topics: pd.Series) -> None:
 
 
 def channel_mix(data: pd.DataFrame) -> go.Figure:
-    figure = px.pie(
-        data,
-        names="source",
-        values="Volume",
-        hole=0.64,
+    sorted_data = data.sort_values("Volume", ascending=True)
+    figure = px.bar(
+        sorted_data,
+        x="Volume",
+        y="source",
+        orientation="h",
         title="Channel mix",
-        color_discrete_sequence=TOPIC_COLORS,
-    )
-    # Keep channel names in the wrapping legend instead of outside the donut.
-    figure.update_traces(
-        textposition="inside",
-        textinfo="percent",
-        insidetextfont=dict(color="#FFFFFF", size=12),
-        marker=dict(line=dict(color="#FFFFFF", width=2)),
-        hovertemplate="%{label}<br>%{value} voices · %{percent}<extra></extra>",
-        sort=False,
+        color_discrete_sequence=["#006666"],
+        text="Volume",
     )
     style_figure(figure, 430)
-    figure.update_layout(margin=dict(l=20, r=20, t=60, b=90), legend=dict(y=-0.04))
+    max_volume = float(sorted_data["Volume"].max()) if not sorted_data.empty else 10.0
+    figure.update_traces(
+        textposition="outside",
+        textfont=dict(color=TEXT_COLOR, size=12),
+        texttemplate="%{text:,}",
+        marker=dict(line=dict(color="#004F52", width=1)),
+        hovertemplate="<b>%{y}</b><br>Volume: %{x:,} voices<extra></extra>",
+        cliponaxis=False,
+    )
+    figure.update_xaxes(
+        title="Voices",
+        range=[0, max_volume * 1.18],
+        rangemode="tozero",
+    )
+    figure.update_yaxes(title=None, automargin=True)
+    figure.update_layout(
+        uniformtext=dict(mode=False),
+        margin=dict(l=20, r=60, t=60, b=50),
+        showlegend=False,
+    )
     return figure
 
 
@@ -155,18 +167,35 @@ def sentiment_signal(data: pd.DataFrame) -> go.Figure:
 
 
 def top_issue_clusters(data: pd.DataFrame) -> go.Figure:
+    sorted_data = data.sort_values("Volume")
     figure = px.bar(
-        data.sort_values("Volume"),
+        sorted_data,
         x="Volume",
         y="topic_cluster",
         orientation="h",
         color="Negative",
         color_continuous_scale=["#FDE2D8", "#E55300", "#A8241A"],
         title="Top issue clusters",
+        text="Volume",
     )
     style_figure(figure, max(380, 150 + len(data) * 46))
+    max_volume = float(sorted_data["Volume"].max()) if not sorted_data.empty else 10.0
+    figure.update_traces(
+        textposition="outside",
+        textfont=dict(color=TEXT_COLOR, size=12),
+        texttemplate="%{text:,}",
+        cliponaxis=False,
+    )
     _topic_axis(figure, data["topic_cluster"])
-    figure.update_xaxes(title="Voice volume", rangemode="tozero")
+    figure.update_xaxes(
+        title="Voice volume",
+        range=[0, max_volume * 1.18],
+        rangemode="tozero",
+    )
+    figure.update_layout(
+        uniformtext=dict(mode=False),
+        margin=dict(r=60),
+    )
     figure.update_coloraxes(colorbar_tickformat=".0%", colorbar_title="Negative share")
     return figure
 

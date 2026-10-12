@@ -29,7 +29,7 @@ def render(services: AppServices) -> None:
         st.info("Belum ada data VoC. Data Admin dapat mengimpor data di Data Ingestion.")
         return
 
-    left, right = st.columns([0.9, 1.45])
+    left, right = st.columns([1, 1.3])
     with left:
         charts.render_chart(charts.channel_mix(analytics.channel_volume(frame)), "home_channels")
     trend = analytics.sentiment_trend(frame)

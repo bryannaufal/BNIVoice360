@@ -76,7 +76,7 @@ def test_all_figures_define_font_background_and_auto_margins(services):
         assert figure.layout.hoverlabel.font.color == charts.TEXT_COLOR
         assert figure.layout.xaxis.automargin is True
         assert figure.layout.yaxis.tickfont.color == charts.TEXT_COLOR
-    assert figures[0].data[0].textposition == "inside"
+    assert figures[0].data[0].textposition == "outside"
     assert figures[3].data[0].textfont.color == charts.TEXT_COLOR
     assert "<br>" in figures[4].layout.yaxis.ticktext[0]
     assert figures[4].layout.height >= 430
