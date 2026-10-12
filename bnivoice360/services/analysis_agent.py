@@ -77,6 +77,8 @@ REFUSALS = {
 def use_analysis(text, state):
     """Keep explicit ticket operations local; route varied questions and analytic follow-ups to tools."""
     intent = local_intent(text, state)
+    if intent and intent.action in {"exists", "display", "dismiss", "revise"}:
+        return False
     if state.analysis_waiting and not (
         intent and intent.action in {"cancel", "select", "similar", "escalate", "details"}
     ):
@@ -651,6 +653,7 @@ class AnalysisAgent:
         finally:
             if status == "refused":
                 state.analysis_waiting = False
+            self.batch.audit.mark_outcome(status=status)
             self.batch.audit.log(
                 session_id,
                 "analysis_finished",

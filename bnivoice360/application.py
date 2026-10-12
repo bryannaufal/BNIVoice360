@@ -7,7 +7,7 @@ import streamlit as st
 from bnivoice360.config import Settings
 from bnivoice360.container import create_services
 from bnivoice360.data.embeddings import ensure_embeddings
-from bnivoice360.pages import companion, graph, home, ingestion, issues
+from bnivoice360.pages import companion, companion_evaluation, graph, home, ingestion, issues
 from bnivoice360.ui.sidebar import render_sidebar
 from bnivoice360.ui.state import initialize_state
 from bnivoice360.ui.theme import inject_css
@@ -18,6 +18,7 @@ PAGES = {
     "Issue Analytics & Voice Feed": issues.render,
     "Graph Analytics": graph.render,
     "BNIVoice360 Companion": companion.render,
+    "Companion Evaluation": companion_evaluation.render,
 }
 
 

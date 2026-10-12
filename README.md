@@ -151,15 +151,62 @@ Before committing, check that local databases, `.venv`, caches, and secrets are 
 
 ## Conversational complaint investigation
 
+### Data Admin: Companion Evaluation
+
+Select **Data Admin → Companion Evaluation** to inspect Companion telemetry and evaluate its behavior.
+Access is checked in navigation, the page, and evaluation service methods using the existing demo role
+selector. The page has **Overview**, **Agent Logs**, **Testing & Evaluation**, and **Run Comparison**.
+
+Overview uses the selected Jakarta date range and separates recorded interaction outcomes, p95 response
+time, provider time, tool time, tokens, and fallback/validation events. Missing metrics display `—`.
+Tokens are counted from provider-call events only, not counted again from analytical run summaries.
+Operational events remain in `<database-stem>.agent-audit.db`. New chat, draft, revision and commit
+interactions receive IDs linking their events. Historical events remain readable without invented IDs
+or durations. Logs support date/event/status/exact-session filters, pagination, event details,
+interaction timelines and a CSV download of the current page. Operational prompts/answers are not
+retrospectively reconstructed or stored in these metadata logs.
+
+The evaluation suite uses six synthetic tickets and a fresh temporary database for every scenario.
+It covers existence/display intents, status/category/channel filters, arbitrary topics, follow-ups,
+period clarification, empty results, selection, full originals in drafts, revision cancellation,
+approval, guardrails, and tool-grounded counts. No operational tickets or existing conversation state
+are used or mutated. Opening or refreshing the page never starts evaluation.
+
+- **Local** runs deterministic search/workflow checks and basic drafts without a provider.
+- **Mock** tests model-output contracts and grounding with deterministic simulated responses; it does
+  not measure live model quality.
+- **Live Groq** uses the configured model/key on synthetic data only, and requires an explicit click.
+  Select at most three scenarios per run. Missing keys prevent execution. Provider failures/fallbacks
+  are visible in results; draft scenarios require validated AI prose to pass in Mock/Live modes.
+
+Evaluation runs, checks, synthetic transcripts/drafts/traces and manual reviews persist in the separate
+`<database-stem>.companion-evaluation.db`. Each run records mode, model, dataset date/digest, source and
+prompt-module digests, suite version and configuration. Detail views show expected/actual values and
+each failed check, with JSON export. Human ratings are separate from automated pass/fail checks and
+do not rewrite them. Interrupted runs retain saved partial results. Comparison aligns scenarios and
+flags regressions; mismatched modes, datasets, suites or scenario coverage are explicitly labelled.
+The page's scenario pass rate is not a substitute for pytest results or semantic human evaluation.
+
+### Search, investigation and escalation
+
 Open **BNIVoice360 Companion** and start with:
 
 > Apakah ada issue terkait QRIS akhir-akhir ini?
 
-Companion asks for a concrete period before searching. Reply **1 minggu terakhir**, **30 hari terakhir**,
+For vague dates such as **akhir-akhir ini**, Companion asks for a concrete period. Reply **1 minggu terakhir**, **30 hari terakhir**,
 **semua periode**, or two ISO dates such as **2026-10-01 sampai 2026-10-11**. Relative dates use Jakarta
 time: seven days includes today and six preceding calendar days; **minggu ini** starts on Monday.
-Search matches literal keywords in complaint text or topic titles, restricted to Negative sentiment.
-Channel and status filters can be named in chat; the actual scope is displayed below the conversation.
+Searches without a stated period default to the last **30 days**, with the exact scope displayed.
+**Apakah ada ...?** checks the database, shows the count/status breakdown, and offers **Tampilkan issue**.
+**Tampilkan / lihat / cari ...** immediately opens the list. Reply **ya, tampilkan** to accept an offer;
+the database is rechecked before showing records. This only opens results, never approves escalation.
+Search matches literal topic phrases in complaint text or topic titles; topics are not limited to QRIS/wondr.
+Negative sentiment is the default; explicit positive/neutral/all-sentiment searches are supported.
+Combine category, channel, status and urgency filters, even without a keyword: **Tampilkan issue IT yang
+masih Escalated**. **Mendesak / perlu segera ditindaklanjuti / urgent** filter the stored urgent label,
+not a verified incident severity. **Yang masih Open saja** refines the active search; **semua kanal**,
+**semua kategori**, **semua urgensi**, **semua topik** clear the respective restriction. A new topic starts
+a new scope. The actual scope is displayed below the conversation.
 Chat text is not embedded. Existing count/top-topic questions remain available and calculated locally.
 Undated rows are only included in explicit all-time searches.
 
@@ -177,8 +224,8 @@ for one question, then write a natural answer grounded in their results. **Tools
 shows executed tools and their outcomes; **Sumber dan hasil analisis** exposes the actual data behind
 citations such as `[T1]`. Date scope and filters are displayed beside the answer. New analysis defaults
 to the last seven days; backlog without dates uses all posting dates. A follow-up such as **Bagaimana
-di PlayStore?** can reuse the previous analytical scope. Explicit search commands keep the existing
-period clarification workflow.
+di PlayStore?** can reuse the previous analytical scope. Explicit search commands use the search
+workflow and its 30-day default, asking about dates only when vague or unsupported.
 
 Comparisons use immediately preceding periods with equal numbers of days. A zero baseline has no
 growth percentage. Outlier/Unlabeled stay in totals but are excluded from named-topic rankings.
@@ -213,12 +260,16 @@ Ask **saya ingin escalate keluhan tersebut**. Companion requires a selection, de
 
 > IT; permintaan: periksa status transaksi; pemeriksaan: petugas sudah memeriksa mutasi
 
-The examination note is optional and omitted when absent. Drafts contain verbatim complaint excerpts,
-actual ticket IDs/counts, and the petugas' exact request and examination note. Groq selects quotes;
-the application rejects invented quotes, IDs, missing quote coverage and unsafe content. Causes,
-impacts and requests are not generated. The document is assembled by code and can be copied or
-downloaded as text. Revise the form and regenerate to revise a draft. Drafting does not send messages
-or change status. Rejected/failed AI output is replaced with a quote-free manual template.
+The examination note is optional and omitted when absent. Drafts contain the **full original complaint
+for every selected ticket**, including actual IDs, source and posting date. Originals are assembled
+locally, never rewritten or truncated by the model. Groq creates an evidence-linked summary and
+proposed verification steps, separately labelled as AI suggestions. The application validates citations,
+quote/numeric grounding, selected-ticket coverage and unsupported claims. Technical causes and actual
+impact remain unconfirmed; the petugas' request and examination remain verbatim. You can download the
+document, revise through the form, or ask **revisi draft agar lebih singkat dan formal**. Each revision
+cancels the old preview and requires fresh approval. Drafting does not send messages or change status.
+Rejected/failed AI output uses a basic local summary while preserving every full original complaint.
+This update does not add personal-information masking; existing remote screening remains in place.
 
 To change status, check approval and click **Konfirmasi eskalasi N tiket**. Only Open tickets can be
 committed; Escalated/Resolved tickets can produce a document without a status action. Approval binds
@@ -232,7 +283,7 @@ Companion uses the existing Groq key automatically. Supported secret layouts: `G
 Default model: `openai/gpt-oss-20b`. Keys are never saved in history or session state. For local-only
 operation set `$env:BNIVOICE360_COMPANION_REMOTE_ENABLED = "0"` before starting Streamlit; this is
 separate from the Issue Analytics batch panel's remote-AI setting. Without Groq, common commands,
-period buttons, selection, templates and approval remain usable. For unrecognized local terms,
+period buttons, selection, basic drafts and approval remain usable. For unrecognized local terms,
 use quotes, for example **cari keluhan "pembayaran digital" 7 hari terakhir**.
 
 Intent extraction uses strict JSON schema and local validation for allowed actions, explicit dates,

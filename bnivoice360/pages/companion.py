@@ -34,7 +34,7 @@ def _reply(text: str, state: CompanionState):
 def render(services: AppServices) -> None:
     header(
         "BNIVoice360 Companion",
-        "Analisis tren, kanal, dan backlog; telusuri keluhan dan siapkan draft eskalasi.",
+        "Temukan issue, tinjau keluhan asli, dan siapkan eskalasi dengan konteks yang jelas.",
         "Complaint Investigation Companion",
     )
     state = st.session_state.setdefault("companion_context", CompanionState())
@@ -53,6 +53,9 @@ def render(services: AppServices) -> None:
     with st.expander("Contoh pertanyaan"):
         st.markdown(
             "- Apakah ada issue terkait QRIS akhir-akhir ini?\n"
+            "- Apakah ada keluhan mendesak terkait produk tertentu?\n"
+            "- Tampilkan issue IT yang masih Escalated.\n"
+            "- Yang masih Open saja.\n"
             "- Tampilkan keluhan transfer gagal 30 hari terakhir dari PlayStore.\n"
             "- Keluhan apa yang meningkat minggu ini dibanding periode sebelumnya?\n"
             "- Apakah keluhan QRIS lebih banyak muncul di X atau PlayStore?\n"
@@ -61,6 +64,7 @@ def render(services: AppServices) -> None:
             "- Buat briefing keluhan minggu ini untuk tim IT.\n"
             "- Pilih nomor 2.\n- Apakah ada keluhan serupa?\n"
             "- Saya ingin escalate keluhan tersebut."
+            "\n- Revisi draft agar lebih singkat dan formal."
         )
     st.caption(
         "Masking PII belum aktif. Groq dapat memproses arahan dan cuplikan keluhan; "
@@ -68,7 +72,8 @@ def render(services: AppServices) -> None:
     )
     if not api_key:
         st.info(
-            "Mode lokal: pencarian, pemilihan tiket, template draft, dan konfirmasi tetap tersedia."
+            "Mode lokal aktif: pencarian dan eskalasi tetap tersedia. "
+            "Draft menggunakan ringkasan dasar; ringkasan dan saran AI memerlukan koneksi Groq."
         )
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
@@ -107,8 +112,49 @@ def render(services: AppServices) -> None:
                 reply = conversation.handle(state, prompt, session_id, role, api_key=api_key)
             respond(reply)
             st.rerun()
-        st.markdown("**Pencarian dan tiket untuk eskalasi**")
-        st.caption(conversation.scope(state))
+        if state.query:
+            st.markdown("**Cakupan pencarian aktif**")
+            st.caption(conversation.scope(state))
+        else:
+            st.caption(
+                "Mulai dengan topik bebas atau pilih pencarian berikut. Periode default: 30 hari terakhir."
+            )
+            for column, label, query in zip(
+                st.columns(3),
+                ["Issue urgent", "IT · Escalated", "Keluhan Open"],
+                [
+                    "Tampilkan issue urgent",
+                    "Tampilkan issue IT yang masih Escalated",
+                    "Tampilkan keluhan Open",
+                ],
+                strict=True,
+            ):
+                if column.button(label, key="companion_start_" + label, use_container_width=True):
+                    respond(conversation.handle(state, query, session_id, role, api_key=api_key))
+                    st.rerun()
+        if state.stage == Stage.OFFER:
+            with st.container(border=True):
+                st.write(
+                    f"{state.total:,} keluhan ditemukan. Ingin melihat detail dan memilih tiket?"
+                )
+                show, dismiss = st.columns(2)
+                if show.button(
+                    "Tampilkan issue",
+                    key="companion_show_results",
+                    type="primary",
+                    use_container_width=True,
+                ):
+                    respond(
+                        conversation.handle(
+                            state, "ya, tampilkan", session_id, role, api_key=api_key
+                        )
+                    )
+                    st.rerun()
+                if dismiss.button("Nanti dulu", key="companion_dismiss", use_container_width=True):
+                    respond(
+                        conversation.handle(state, "tidak dulu", session_id, role, api_key=api_key)
+                    )
+                    st.rerun()
         if state.analysis_evidence:
             with st.expander("Pilih keluhan dari analisis terbaru"):
                 for alias in state.analysis_evidence:
@@ -128,6 +174,11 @@ def render(services: AppServices) -> None:
                     respond(conversation.handle(state, text, session_id, role, api_key=api_key))
                     st.rerun()
         if state.result_ids:
+            st.markdown(f"**Hasil pencarian · {state.total:,} keluhan**")
+            if state.total > len(state.result_ids):
+                st.caption(
+                    f"Menampilkan {len(state.result_ids)} hasil terbaru. Persempit filter untuk melihat hasil lain."
+                )
             if state.result_kind == "similar":
                 st.caption(
                     "Hasil kemiripan: kandidat Negative dan Open; keyword tidak membatasi vector search."
@@ -142,9 +193,22 @@ def render(services: AppServices) -> None:
                     st.caption(
                         f"{row['date_posted']} · {row['source']} · {row['topic_cluster']} · {row['escalation_status']}"
                     )
+                    categories = [
+                        name
+                        for name in ("IT", "Bisnis", "Operasional")
+                        if row.get("is_" + name) == 1
+                    ]
+                    st.caption(
+                        " · ".join(
+                            [*categories, "Urgent" if row.get("is_Urgent") == 1 else "Non-urgent"]
+                        )
+                    )
                     if ticket in state.scores:
                         st.caption(f"Similarity: {state.scores[ticket]:.3f}")
                     st.text(str(row["content"])[:600])
+                    if len(str(row["content"])) > 600:
+                        with st.expander("Baca keluhan lengkap"):
+                            st.text(str(row["content"]))
                     label = "Batalkan pilihan" if ticket in state.selected_ids else "Pilih keluhan"
                     if st.button(label, key="companion_pick_" + digest):
                         ids = (
@@ -231,12 +295,13 @@ def render(services: AppServices) -> None:
         if state.draft_text:
             st.markdown("**Draft untuk ditinjau**")
             st.caption(
-                "Fakta berasal dari kutipan keluhan; pemeriksaan dan permintaan berasal dari petugas. "
-                "Ubah form lalu buat ulang untuk merevisi draft."
+                "Keluhan asli dicantumkan utuh. Ringkasan menjelaskan laporan nasabah; "
+                "saran AI perlu ditinjau. Revisi draft memerlukan persetujuan baru."
             )
-            if state.draft_mode == "manual":
+            if state.draft_mode != "groq":
                 st.info(
-                    "Kutipan AI tidak digunakan. Tinjau tiket secara manual sebelum memakai draft."
+                    "Draft dasar: ringkasan AI tidak tersedia atau tidak lolos validasi. "
+                    "Keluhan asli tetap lengkap dan dapat ditinjau."
                 )
             st.code(state.draft_text, language=None, wrap_lines=True)
             st.download_button(
@@ -246,6 +311,23 @@ def render(services: AppServices) -> None:
                 mime="text/plain",
                 key="companion_download",
             )
+            with st.form("companion_revision_form"):
+                revision = st.text_area(
+                    "Arahan revisi draft",
+                    placeholder="Contoh: lebih singkat dan formal; tekankan kendala login.",
+                    max_chars=1000,
+                    key="companion_revision_instruction",
+                )
+                revise = st.form_submit_button("Revisi draft", key="companion_revise_submit")
+            if revise:
+                if revision.strip():
+                    with st.spinner("Merevisi draft berdasarkan tiket dan arahan Anda..."):
+                        respond(
+                            conversation.revise_draft(state, session_id, role, revision, api_key)
+                        )
+                    st.rerun()
+                else:
+                    st.info("Isi arahan revisi terlebih dahulu.")
             if state.proposal:
                 approved = st.checkbox(
                     "Saya telah memeriksa draft dan menyetujui perubahan tiket terpilih menjadi Escalated.",

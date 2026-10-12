@@ -8,6 +8,7 @@ from bnivoice360.data.repository import VoiceRepository
 from bnivoice360.data.seed import initialize_data, load_seed
 from bnivoice360.services.agent.workflow import BatchAgent
 from bnivoice360.services.companion import CompanionService
+from bnivoice360.services.companion_evaluation import CompanionEvaluation
 from bnivoice360.services.companion_workflow import CompanionConversation
 from bnivoice360.services.crawler import Crawler, SimulatedCrawler
 from bnivoice360.services.ingestion import IngestionService
@@ -23,6 +24,7 @@ class AppServices:
     companion: CompanionService
     batch_agent: BatchAgent
     conversation: CompanionConversation
+    evaluation: CompanionEvaluation
 
 
 def create_services(settings: Settings | None = None) -> AppServices:
@@ -41,4 +43,5 @@ def create_services(settings: Settings | None = None) -> AppServices:
         companion=CompanionService(repository),
         batch_agent=batch_agent,
         conversation=CompanionConversation(batch_agent),
+        evaluation=CompanionEvaluation(settings),
     )

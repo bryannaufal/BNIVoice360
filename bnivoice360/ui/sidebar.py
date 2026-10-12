@@ -19,7 +19,8 @@ def render_sidebar(repository: VoiceRepository, page_titles: list[str]) -> str:
         titles = [
             title
             for title in page_titles
-            if title != "Data Ingestion" or st.session_state.selected_role == Role.DATA_ADMIN.value
+            if title not in {"Data Ingestion", "Companion Evaluation"}
+            or st.session_state.selected_role == Role.DATA_ADMIN.value
         ]
         if st.session_state.get("current_page") not in titles:
             st.session_state.current_page = "Home"
