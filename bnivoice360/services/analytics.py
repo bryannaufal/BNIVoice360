@@ -64,9 +64,12 @@ def channel_volume(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def sentiment_trend(frame: pd.DataFrame) -> pd.DataFrame:
+    valid = frame[frame["date_posted"].notna()]
+    current_year = max(2026, pd.Timestamp.now().year)
+    valid = valid[valid["date_posted"].dt.year <= current_year]
     return (
-        frame.assign(day=frame["date_posted"].dt.floor("D"))
-        .groupby(["day", "sentiment"])
+        valid.assign(month=valid["date_posted"].dt.to_period("M").dt.to_timestamp())
+        .groupby(["month", "sentiment"])
         .size()
         .reset_index(name="Volume")
     )
