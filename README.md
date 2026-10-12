@@ -68,6 +68,10 @@ streamlit run app.py
 
 For offline startup or a deliberately empty database, set `$env:BNIVOICE360_AUTO_INITIALIZE = "0"`. Set it to `"1"` (default) to initialize empty databases automatically. Disable automatic initialization after intentionally removing all voices if you want the database to remain empty.
 
+On first startup, the app downloads `topic_id_embedding_mapping.parquet` and `data_id_embedding_mapping.parquet` from the supplied Google Drive sources into `.embeddings/`. Later launches reuse these files; vectors are stored for future use and are not loaded into memory or inserted into SQLite. Downloads use temporary files and validate the Parquet envelope before publishing them to the cache. A failed download displays a warning and retries on the next startup/rerun; the existing pages remain available.
+
+Set `BNIVOICE360_EMBEDDING_DIR` to choose another cache directory, or `BNIVOICE360_DOWNLOAD_EMBEDDINGS=0` for offline startup. Source URLs can be overridden with `BNIVOICE360_TOPIC_EMBEDDING_URL` and `BNIVOICE360_DATA_EMBEDDING_URL`. The Google Drive files must allow downloads without signing in. To refresh an artifact, remove its cached file and restart the app.
+
 Seeding sets `escalation_status = "Escalated"` for records before one calendar month prior to initialization in Jakarta time, and `"Open"` at or after the cutoff. Undated source rows are retained with a null posting date and status `"Escalated"`; the command reports their count. Nonempty invalid dates fail validation. Use `--as-of "2026-10-11"` to reproduce a cutoff of September 11, 2026. Later startups preserve status changes, including `"Resolved"`. Date filters exclude undated voices; overall metrics still include them.
 
 The status field accepts exactly `Open`, `Escalated`, or `Resolved`, defaults to `Open`, and is enforced by SQLite. Existing databases are backed up and migrated automatically: the former binary field maps `0` to `Open` and `1` to `Escalated`, preserving topic links and author information.
@@ -144,6 +148,119 @@ git log --oneline -5
 ```
 
 Before committing, check that local databases, `.venv`, caches, and secrets are not listed by `git status`. Never commit passwords or API keys; use a local `.env` file (already ignored) for development-only settings.
+
+## Conversational complaint investigation
+
+Open **BNIVoice360 Companion** and start with:
+
+> Apakah ada issue terkait QRIS akhir-akhir ini?
+
+Companion asks for a concrete period before searching. Reply **1 minggu terakhir**, **30 hari terakhir**,
+**semua periode**, or two ISO dates such as **2026-10-01 sampai 2026-10-11**. Relative dates use Jakarta
+time: seven days includes today and six preceding calendar days; **minggu ini** starts on Monday.
+Search matches literal keywords in complaint text or topic titles, restricted to Negative sentiment.
+Channel and status filters can be named in chat; the actual scope is displayed below the conversation.
+Chat text is not embedded. Existing count/top-topic questions remain available and calculated locally.
+Undated rows are only included in explicit all-time searches.
+
+Companion also answers broader analytical questions through Groq tool calling:
+
+- **Keluhan apa yang paling meningkat minggu ini dibanding periode sebelumnya?**
+- **Apakah keluhan QRIS lebih banyak muncul di X atau PlayStore?**
+- **Topik mana yang punya backlog Open terbanyak dan paling lama?**
+- **Masalah spesifik apa yang dilaporkan dalam keluhan transfer?**
+- **Buat briefing keluhan minggu ini untuk tim IT.**
+
+The model chooses from read-only tools: `dataset_coverage`, `volume_breakdown`, `compare_periods`,
+`daily_trend`, `backlog_age`, `complaint_examples`, and `similar_complaints`. It can use several tools
+for one question, then write a natural answer grounded in their results. **Tools yang digunakan**
+shows executed tools and their outcomes; **Sumber dan hasil analisis** exposes the actual data behind
+citations such as `[T1]`. Date scope and filters are displayed beside the answer. New analysis defaults
+to the last seven days; backlog without dates uses all posting dates. A follow-up such as **Bagaimana
+di PlayStore?** can reuse the previous analytical scope. Explicit search commands keep the existing
+period clarification workflow.
+
+Comparisons use immediately preceding periods with equal numbers of days. A zero baseline has no
+growth percentage. Outlier/Unlabeled stay in totals but are excluded from named-topic rankings.
+Categories can overlap. Backlog age is measured since posting, **not** time in status, resolution time,
+or SLA compliance. Examples are recent screened samples, not exhaustive subtopic frequencies.
+Similarity uses existing voice vectors, Open candidates and the anchor's named topic; it never embeds
+chat or silently broadens an Outlier/Unlabeled query. Missing data/tools or unsupported questions
+(such as actual losses, verified technical causes or SOP without a source) are refused. Excerpts and
+labels are screened before provider use. Quoted passages must match a cited source; numeric values
+are checked against cited tool data. These checks do not guarantee that every interpretation is correct.
+
+To act on an analytical example, explicitly select **Pilih T2.E1** in the analysis panel or chat.
+Selection binds the displayed row version; concurrent changes require a fresh analysis. Analytical
+questions do not select tickets, create drafts, invalidate existing approval, or change status.
+
+Results show ID, date, source, status and excerpt: ten per page, up to 200 results. The total count
+includes matches beyond that limit. **Nothing is selected automatically.** Click **Pilih keluhan**,
+write **pilih nomor 2**, or explicitly refer to a visible ID. **Yang saldo terpotong** selects a ticket
+only if that phrase uniquely identifies a visible result. Ambiguous references require selection.
+Selected IDs remain visible and survive navigation within the browser session. A new search or cancel
+clears selection and pending drafts.
+
+With exactly one ticket selected, ask **apakah ada keluhan serupa**. Search uses that ticket's existing
+384-dimensional vector and Open negative complaints in the same period/channels. Same-topic search
+is the default; Outlier/Unlabeled requires explicit cross-topic confirmation. Missing vectors are
+reported; a failed search never masquerades as zero matches. Similarity does not prove a shared
+cause. Only the anchor remains selected; choose additional candidates explicitly. Configurable
+defaults: `BNIVOICE360_AGENT_SIMILARITY` (0.80, provisional), `BNIVOICE360_AGENT_LIMIT` (20, maximum 50).
+
+Ask **saya ingin escalate keluhan tersebut**. Companion requires a selection, destination unit
+(IT/Operasional/Bisnis), and request written by the petugas. Enter the form or use chat:
+
+> IT; permintaan: periksa status transaksi; pemeriksaan: petugas sudah memeriksa mutasi
+
+The examination note is optional and omitted when absent. Drafts contain verbatim complaint excerpts,
+actual ticket IDs/counts, and the petugas' exact request and examination note. Groq selects quotes;
+the application rejects invented quotes, IDs, missing quote coverage and unsafe content. Causes,
+impacts and requests are not generated. The document is assembled by code and can be copied or
+downloaded as text. Revise the form and regenerate to revise a draft. Drafting does not send messages
+or change status. Rejected/failed AI output is replaced with a quote-free manual template.
+
+To change status, check approval and click **Konfirmasi eskalasi N tiket**. Only Open tickets can be
+committed; Escalated/Resolved tickets can produce a document without a status action. Approval binds
+exact IDs, complete row snapshots, session, role and draft/input context, and expires after 15 minutes.
+Status writes and the success audit commit together using `<database-stem>.agent-audit.db`; the
+business database remains at two tables. DELETE rollback journals are required; WAL is rejected.
+Audit failure or concurrent edits abort the whole batch. Repeated submission does not repeat writes.
+
+Companion uses the existing Groq key automatically. Supported secret layouts: `GROQ_API_KEY = "..."`,
+`GROQ = "..."`, or `[groq]` with `api_key = "..."`. Environment `GROQ_API_KEY` takes precedence.
+Default model: `openai/gpt-oss-20b`. Keys are never saved in history or session state. For local-only
+operation set `$env:BNIVOICE360_COMPANION_REMOTE_ENABLED = "0"` before starting Streamlit; this is
+separate from the Issue Analytics batch panel's remote-AI setting. Without Groq, common commands,
+period buttons, selection, templates and approval remain usable. For unrecognized local terms,
+use quotes, for example **cari keluhan "pembayaran digital" 7 hari terakhir**.
+
+Intent extraction uses strict JSON schema and local validation for allowed actions, explicit dates,
+selection evidence and user-provided fields. There is no model write action or arbitrary SQL/shell/web
+tool. Analytical turns allow at most six sequential planning rounds/tool calls, a 60-second overall
+deadline and 20,000 reported tokens. Natural answers use a separate strict JSON response; an invalid
+format or unsupported number may be regenerated once within the same budget. Rejected prose is
+never displayed or copied into retry prompts. Workflow commands can use an intent call, quote
+extraction and a grounded natural reply; the application retains authority over actions. Requests
+have at most two HTTP attempts, 1,800 completion tokens (900 for tool selection), a 15-second socket
+timeout and a 40-second per-response deadline. Tool calling and strict final responses are separate,
+as required by [Groq's tool-use documentation](https://console.groq.com/docs/tool-use/overview).
+Only the current question, minimal workflow flags or previous analytical question/scope, and
+screened tool results are sent; full chat history is not sent. History is capped at 41 messages and
+is session-local. Common statistics also run through these tools in local mode.
+
+The separate audit database logs `analysis_started`, tool start/finish, output rejection/retry,
+planner corrections and `analysis_finished`, with run/session IDs, digests, result counts, duration,
+reported tokens, model, outcome and safe reason codes. Prompt text, complaint content, generated
+answers/drafts, authors and API keys are excluded. Provider/tool failures produce a safe fallback;
+successful screened tool results remain inspectable. Audit failure prevents a success response.
+The role selector is not authentication.
+
+**PII masking remains deferred.** Author metadata and real ticket IDs are excluded from Groq payloads.
+Common structured PII/injection checks are heuristic; names and addresses may still be present.
+Exact citations prevent invented quotes, not incorrect real-world claims. Review drafts before use.
+The boundaries follow [Groq structured output documentation](https://console.groq.com/docs/structured-outputs)
+and [OWASP agent security guidance](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html).
 
 ## Troubleshooting
 

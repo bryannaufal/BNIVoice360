@@ -9,6 +9,7 @@ from bnivoice360.container import AppServices
 from bnivoice360.services import analytics
 from bnivoice360.services import issues as diagnostics
 from bnivoice360.ui import charts
+from bnivoice360.ui.batch_agent import render_batch_agent
 from bnivoice360.ui.components import header, section_title, urgent_alert
 from bnivoice360.ui.filters import render_issue_filters
 from bnivoice360.ui.state import show_notice
@@ -173,3 +174,4 @@ def render(services: AppServices) -> None:
                 )
                 st.caption("Unit dapat tumpang tindih; total persentase dapat melebihi 100%.")
     render_voice_feed(topic_filtered, services.repository, filter_context=repr((filters, topic_id)))
+    render_batch_agent(services.batch_agent, filters, topic_id)

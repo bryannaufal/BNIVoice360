@@ -125,6 +125,10 @@ def _render_card(row: pd.Series, repository: VoiceRepository) -> None:
                 f"Status: {row['escalation_status']} · "
                 f"Category: {', '.join(category_labels(row)) or 'Uncategorized'}"
             )
+        if row["escalation_status"] == "Open":
+            if st.button("Cari keluhan serupa", key=f"similar_{card_key}"):
+                st.session_state["batch_anchor_id"] = record_id
+                st.rerun()
 
 
 def render_voice_feed(

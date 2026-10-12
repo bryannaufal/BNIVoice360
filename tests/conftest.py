@@ -15,6 +15,8 @@ def isolated_initialization(monkeypatch):
     # Tests never download private feedback or overwrite a runtime database.
     monkeypatch.setenv("BNIVOICE360_AUTO_INITIALIZE", "0")
     monkeypatch.setenv("BNIVOICE360_INIT_OVERWRITE", "0")
+    monkeypatch.setenv("BNIVOICE360_DOWNLOAD_EMBEDDINGS", "0")
+    monkeypatch.setenv("BNIVOICE360_COMPANION_REMOTE_ENABLED", "0")
 
 
 @pytest.fixture

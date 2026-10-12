@@ -20,3 +20,5 @@ __pycache__/
 *.sqlite3
 *.log
 .initialization/
+.embeddings/
+.notebooks/

@@ -1,3 +1,5 @@
 streamlit>=1.55,<2
 pandas>=2.0,<3
 plotly>=5.18,<7
+numpy>=1.26,<3
+pyarrow>=15,<24

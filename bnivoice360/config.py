@@ -68,3 +68,40 @@ class Settings:
             "https://drive.google.com/uc?export=download&id=1l-7710H8kP5oWg8dWMFnui48-7aiSsrt",
         )
     )
+    download_embeddings: bool = field(
+        default_factory=lambda: os.environ.get("BNIVOICE360_DOWNLOAD_EMBEDDINGS", "1") == "1"
+    )
+    embedding_directory: Path = field(
+        default_factory=lambda: (
+            Path(os.environ.get("BNIVOICE360_EMBEDDING_DIR", str(PROJECT_ROOT / ".embeddings")))
+            .expanduser()
+            .resolve()
+        )
+    )
+    topic_embedding_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "BNIVOICE360_TOPIC_EMBEDDING_URL",
+            "https://drive.usercontent.google.com/download?id=1-cnLo1sZFMCKatU45BbvYz_UBc4NQyal&export=download&confirm=t",
+        )
+    )
+    data_embedding_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "BNIVOICE360_DATA_EMBEDDING_URL",
+            "https://drive.usercontent.google.com/download?id=1jr7xecYrXVMI35TWeIOtp8wL7Uy3MxrF&export=download&confirm=t",
+        )
+    )
+    agent_model: str = field(
+        default_factory=lambda: os.environ.get("BNIVOICE360_AGENT_MODEL", "openai/gpt-oss-20b")
+    )
+    agent_similarity_threshold: float = field(
+        default_factory=lambda: float(os.environ.get("BNIVOICE360_AGENT_SIMILARITY", "0.80"))
+    )
+    agent_candidate_limit: int = field(
+        default_factory=lambda: int(os.environ.get("BNIVOICE360_AGENT_LIMIT", "20"))
+    )
+    agent_remote_enabled: bool = field(
+        default_factory=lambda: os.environ.get("BNIVOICE360_AGENT_REMOTE_ENABLED", "0") == "1"
+    )
+    companion_remote_enabled: bool = field(
+        default_factory=lambda: os.environ.get("BNIVOICE360_COMPANION_REMOTE_ENABLED", "1") == "1"
+    )
