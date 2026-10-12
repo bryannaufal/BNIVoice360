@@ -11,6 +11,7 @@ from bnivoice360.services.agent.workflow import Proposal
 class Stage(str, Enum):
     IDLE = "idle"
     PERIOD = "period"
+    OFFER = "offer"
     RESULTS = "results"
     SELECTED = "selected"
     CROSS_TOPIC = "cross_topic"
@@ -26,6 +27,8 @@ class ComplaintQuery:
     sources: tuple[str, ...] = ()
     status: str = "All"
     categories: tuple[str, ...] = ()
+    urgent_only: bool = False
+    sentiments: tuple[str, ...] = ("Negative",)
 
     def filters(self, *, similarity: bool = False) -> IssueFilters:
         from bnivoice360.config import CATEGORY_COLUMNS, SOURCES
@@ -34,9 +37,10 @@ class ComplaintQuery:
             start_date=self.start,
             end_date=self.end,
             sources=self.sources or SOURCES,
-            sentiments=("Negative",),
+            sentiments=("Negative",) if similarity else self.sentiments,
             escalation_status="Open" if similarity else self.status,
             categories=self.categories or tuple(CATEGORY_COLUMNS),
+            urgent_only=self.urgent_only,
         )
 
 
@@ -57,6 +61,8 @@ class CompanionState:
     draft_text: str = ""
     draft_mode: str = ""
     draft_reason: str = ""
+    draft_revision: str = ""
+    search_action: str = "display"
     proposal: Proposal | None = None
     role: str = ""
     tool_trace: list[dict] = field(default_factory=list)
@@ -69,4 +75,6 @@ class CompanionState:
 
     @property
     def visible_ids(self) -> tuple[str, ...]:
+        if self.stage == Stage.OFFER:
+            return ()
         return self.result_ids[self.page * 10 : (self.page + 1) * 10]
