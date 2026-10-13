@@ -150,18 +150,47 @@ def channel_mix(data: pd.DataFrame) -> go.Figure:
 
 
 def sentiment_signal(data: pd.DataFrame) -> go.Figure:
+    x_col = (
+        "month"
+        if "month" in data.columns
+        else ("day" if "day" in data.columns else data.columns[0])
+    )
     figure = px.line(
         data,
-        x="day",
+        x=x_col,
         y="Volume",
         color="sentiment",
         markers=True,
-        title="Daily sentiment signal",
+        title="Monthly sentiment signal",
         color_discrete_map=SENTIMENT_COLORS,
     )
     style_figure(figure, 430)
-    figure.update_xaxes(title=None, nticks=7, tickformat="%d %b", tickangle=0)
+    if not data.empty and x_col in data.columns and data[x_col].notna().any():
+        min_date = data[x_col].min()
+        max_date = data[x_col].max()
+        start_year = min_date.year
+        end_year = max_date.year
+        if start_year == end_year:
+            tickvals = [min_date]
+            ticktext = [str(start_year)]
+        else:
+            tickvals = [min_date, max_date]
+            ticktext = [str(start_year), str(end_year)]
+
+        figure.update_xaxes(
+            title=None,
+            tickmode="array",
+            tickvals=tickvals,
+            ticktext=ticktext,
+            range=[min_date, max_date],
+            tickangle=0,
+        )
+    else:
+        figure.update_xaxes(title=None, tickangle=0)
     figure.update_yaxes(title=None, rangemode="tozero")
+    figure.update_traces(
+        hovertemplate="<b>%{fullData.name}</b><br>Bulan: %{x|%b %Y}<br>Volume: %{y:,} voices<extra></extra>"
+    )
     figure.update_layout(margin=dict(b=85))
     return figure
 
