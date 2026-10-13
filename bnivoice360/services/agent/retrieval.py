@@ -25,13 +25,18 @@ def _load_vectors(path: str, modified: int, size: int) -> tuple[tuple[str, ...],
     return ids, vectors
 
 
+def load_voice_vectors(path: Path) -> tuple[tuple[str, ...], np.ndarray]:
+    """Reuse validated, normalized vectors; file changes invalidate the small cache."""
+    stat = path.stat()
+    return _load_vectors(str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+
+
 def similar_voices(
     path: Path, frame: pd.DataFrame, anchor_id: str, threshold: float, limit: int
 ) -> pd.DataFrame:
     if not 0 <= threshold <= 1 or not 1 <= limit <= 50:
         raise ValueError("Similarity must be 0–1 and candidate limit 1–50.")
-    stat = path.stat()
-    ids, vectors = _load_vectors(str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    ids, vectors = load_voice_vectors(path)
     index = {record_id: i for i, record_id in enumerate(ids)}
     if anchor_id not in index:
         raise ValueError("Keluhan awal belum memiliki embedding; pencarian tidak tersedia.")

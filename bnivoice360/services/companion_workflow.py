@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from bnivoice360.domain import Role
 from bnivoice360.services.agent.audit import fingerprint
 from bnivoice360.services.agent.groq_client import GroqClient, ModelUnavailable
 from bnivoice360.services.agent.guardrails import (
@@ -213,6 +214,52 @@ class CompanionConversation:
         state.draft_revision = ""
         self.batch.audit.log(session_id, "companion_selection", count=len(ids))
         return f"{len(ids)} keluhan dipilih. Saya dapat mencari yang serupa atau menyiapkan draft eskalasi."
+
+    def select_from_graph(
+        self,
+        state: CompanionState,
+        ids: tuple[str, ...],
+        snapshots: dict[str, str],
+        query: ComplaintQuery,
+        session_id: str,
+        role: str,
+    ) -> str:
+        """Explicit graph checkbox selection uses the previously displayed row versions."""
+        if (
+            not ids
+            or len(ids) > 51
+            or len(set(ids)) != len(ids)
+            or not set(ids) <= snapshots.keys()
+            or role not in {item.value for item in Role}
+        ):
+            raise ReviewRequired("Pilih 1 sampai 51 tiket Open unik dari jaringan yang ditinjau.")
+        with self.repository.database.transaction() as connection:
+            rows = _rows(connection, ids)
+        if any(
+            ticket not in rows
+            or fingerprint(rows[ticket]) != snapshots[ticket]
+            or rows[ticket]["sentiment"] != "Negative"
+            or rows[ticket]["escalation_status"] != "Open"
+            for ticket in ids
+        ):
+            raise ReviewRequired(
+                "Tiket berubah atau tidak lagi Open. Bangun ulang jaringan dan tinjau kembali."
+            )
+        self.invalidate(state, session_id)
+        self.batch.audit.log(session_id, "graph_selection", count=len(ids), role=role)
+        state.role, state.query = role, query
+        state.result_ids, state.selected_ids = ids, ids
+        state.snapshots = {ticket: snapshots[ticket] for ticket in ids}
+        state.total, state.page, state.scores = len(ids), 0, {}
+        state.result_kind, state.stage = "graph", Stage.SELECTED
+        state.team = state.request = state.examination = state.draft_revision = ""
+        state.analysis_evidence, state.analysis_scope = {}, {}
+        state.analysis_question, state.analysis_waiting = "", False
+        state.tool_trace, state.analysis_sources = [], []
+        return (
+            f"{len(ids)} keluhan Open dipilih secara eksplisit dari Graph Analytics. "
+            "Isi unit tujuan dan permintaan untuk membuat draft eskalasi."
+        )
 
     def select_evidence(self, state: CompanionState, alias: str, session_id: str) -> str:
         """An explicit user selection binds an analytical excerpt to the reviewed row version."""

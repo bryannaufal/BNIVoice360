@@ -79,4 +79,3 @@ class OverviewMetrics:
     urgent_open: int
     topic_count: int
     unescalated_topics: int = 0
-

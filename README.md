@@ -151,6 +151,41 @@ Before committing, check that local databases, `.venv`, caches, and secrets are 
 
 ## Conversational complaint investigation
 
+### Graph Analytics: related complaint network
+
+Open **Graph Analytics**, choose a named topic, period, channels, statuses and unit labels, then click
+**Bangun / perbarui jaringan**. The default scope is Negative, Open plus Escalated, within the last
+30 days ending at the latest posting date in the dataset. All-time includes undated complaints.
+To explore across topics, choose **Semua topik** and explicitly enable cross-topic analysis;
+this also allows Outlier/Unlabeled. A named topic remains restricted to that topic.
+
+The network uses existing 384-dimensional voice embeddings with cosine similarity. At most 200
+eligible records enter pairwise computation; the default is 120. When capped, urgent Open records
+come first, followed by other Open, Escalated and Resolved, newest first within each priority.
+Missing embeddings and records omitted by the cap are reported separately. Edges are the union
+of each node's strongest threshold-qualified neighbors (default five). A node may have more than
+five edges when other nodes select it. Groups are connected components, not verified incidents,
+duplicates, or shared root causes. Connectivity can be transitive: not every pair in a group has
+a direct relationship. Isolated complaints remain visible. Group statistics describe displayed
+records only; partial sampling and neighbor limits can change group membership.
+
+Node fill shows channel, border shows status, and larger nodes indicate the stored urgent label.
+Clicking a node opens evidence without selecting it for escalation. Group summaries rank urgent
+Open count, Open count, then oldest Open posting date. Posting age is not time in status or SLA.
+Department flags indicate relevance, not assigned ownership; channel coverage is not a unique
+customer count. **Jelaskan kelompok** provides local statistics, or a validated Groq explanation
+using at most five screened examples when configured. Full text, authors and ticket identifiers
+are not sent as provider metadata; heuristic text screening still does not guarantee PII removal.
+Explanation calls are explicitly triggered and metadata-audited.
+
+Select individual Open ticket checkboxes and click **Lanjutkan ke Companion** to prepare a draft.
+Nothing is preselected. Handoff supports at most 51 tickets, revalidates the original displayed
+row fingerprints, and invalidates any previous Companion draft/approval. It does not change status.
+Companion still requires target-team details, draft review and explicit approval. A read-only
+graph explanation leaves Companion state untouched. The embedded Voice Feed displays live statuses;
+changes require rebuilding the graph before handoff. The graph remains a session snapshot until
+explicit refresh, and the displayed scope reflects the built filters rather than unsubmitted edits.
+
 ### Data Admin: Companion Evaluation
 
 Select **Data Admin → Companion Evaluation** to inspect Companion telemetry and evaluate its behavior.

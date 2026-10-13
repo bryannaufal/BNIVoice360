@@ -412,7 +412,7 @@ def test_groq_read_tools_and_budget(monkeypatch):
         monkeypatch.setattr(
             client,
             "_request",
-            lambda payload: {
+            lambda payload, name=name, arguments=arguments: {
                 "choices": [
                     {
                         "finish_reason": "tool_calls",
