@@ -48,14 +48,18 @@ def overview_metrics(frame: pd.DataFrame, now: pd.Timestamp | None = None) -> Ov
         if len(labeled)
         else 0
     )
+    assigned = assigned_topics(frame)
+    topic_col = "topic_id" if "topic_id" in assigned.columns else "topic_cluster"
+    topic_count = int(assigned[topic_col].nunique()) if not assigned.empty else 0
+    open_assigned = assigned[assigned["escalation_status"].eq("Open")]
+    unescalated = int(open_assigned[topic_col].nunique()) if not open_assigned.empty else 0
     return OverviewMetrics(
         len(frame),
         growth,
         net,
         open_urgent_count(frame),
-        int(
-            assigned_topics(frame)["topic_id" if "topic_id" in frame else "topic_cluster"].nunique()
-        ),
+        topic_count,
+        unescalated,
     )
 
 
