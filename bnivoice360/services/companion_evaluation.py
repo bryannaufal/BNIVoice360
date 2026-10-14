@@ -54,8 +54,8 @@ class CompanionEvaluation:
             or not set(case_ids) <= by_id.keys()
         ):
             raise ValueError("Pilih mode dan skenario evaluasi yang valid.")
-        if mode == "Live Groq" and (not api_key or len(case_ids) > 3):
-            raise ValueError("Live Groq memerlukan API key dan maksimal 3 skenario per eksekusi.")
+        if mode == "Live Groq" and not api_key:
+            raise ValueError("Live Groq memerlukan API key.")
         from bnivoice360.services.companion_workflow import CompanionConversation
 
         today = CompanionConversation.today()

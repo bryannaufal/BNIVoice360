@@ -87,10 +87,6 @@ def test_invalid_modes_cases_and_live_configuration_are_rejected(services):
             services.evaluation.run(ADMIN, mode, ids)
     with pytest.raises(ValueError):
         services.evaluation.run(ADMIN, "Live Groq", ["draft"])
-    with pytest.raises(ValueError):
-        services.evaluation.run(
-            ADMIN, "Live Groq", ["display", "draft", "revision", "analysis"], api_key="test"
-        )
     assert not services.evaluation.store.path.exists()
 
 
@@ -134,16 +130,41 @@ def test_failed_grounding_is_stored_with_expected_actual_and_full_original(servi
     assert "kerusakan server" not in result["actual"]["draft"]
 
 
-def test_live_mode_integration_with_simulated_provider_never_persists_key(services, monkeypatch):
+@pytest.mark.parametrize(
+    "case_ids", [["draft"], [case.case_id for case in CASES]], ids=["single", "full_suite"]
+)
+def test_live_mode_integration_with_simulated_provider_never_persists_key(
+    services, monkeypatch, case_ids
+):
+    original_init = GroqClient.__init__
+
+    def simulated_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.simulated = EvaluationMockClient()
+
+    monkeypatch.setattr(GroqClient, "__init__", simulated_init)
+    monkeypatch.setattr(
+        GroqClient, "_request", lambda *args: pytest.fail("simulated evaluation reached provider")
+    )
     monkeypatch.setattr(
         GroqClient,
         "structured",
-        lambda self, *args, **kwargs: EvaluationMockClient().structured(*args, **kwargs),
+        lambda self, *args, **kwargs: self.simulated.structured(*args, **kwargs),
+    )
+    monkeypatch.setattr(
+        GroqClient,
+        "choose_tools",
+        lambda self, *args, **kwargs: self.simulated.choose_tools(*args, **kwargs),
     )
     key = "gsk_fake_test_credential_not_a_real_key"
-    run = services.evaluation.run(ADMIN, "Live Groq", ["draft"], api_key=key)
+    before = services.repository.database.path.read_bytes()
+    run = services.evaluation.run(ADMIN, "Live Groq", case_ids, api_key=key)
     results = services.evaluation.store.results(ADMIN, run)
-    assert results[0]["status"] == "passed" and results[0]["actual"]["draft_mode"] == "groq"
+    assert len(results) == len(case_ids)
+    assert all(result["status"] == "passed" for result in results)
+    draft = next(result for result in results if result["case_id"] == "draft")
+    assert draft["actual"]["draft_mode"] == "groq"
+    assert services.repository.database.path.read_bytes() == before
     assert key not in json.dumps(
         results
     ) and key not in services.evaluation.store.path.read_bytes().decode(errors="ignore")
@@ -297,3 +318,22 @@ def test_page_guard_rejects_direct_manager_render(services, monkeypatch):
     monkeypatch.setattr(companion_evaluation.st, "error", errors.append)
     companion_evaluation.render(services)
     assert errors and not services.evaluation.store.path.exists()
+
+
+def test_live_page_select_all_enables_full_suite_without_running(streamlit_app, monkeypatch):
+    monkeypatch.setattr(
+        GroqClient, "_request", lambda *args: pytest.fail("page selection reached provider")
+    )
+    app = streamlit_app
+    app.sidebar.selectbox(key="selected_role").set_value(ADMIN).run()
+    app.sidebar.radio(key="current_page").set_value("Companion Evaluation").run()
+    app.selectbox(key="eval_mode").set_value("Live Groq").run()
+    assert app.multiselect(key="eval_cases_Live Groq").value == ["draft"]
+    app.checkbox(key="eval_all_Live Groq").check().run()
+    assert not app.exception
+    assert app.multiselect(key="eval_cases_Live Groq").value == [case.case_id for case in CASES]
+    assert not app.button(key="eval_run").disabled
+    assert "eval_selected_run" not in app.session_state
+    app.checkbox(key="eval_all_Live Groq").uncheck().run()
+    app.multiselect(key="eval_cases_Live Groq").set_value([]).run()
+    assert not app.exception and app.button(key="eval_run").disabled

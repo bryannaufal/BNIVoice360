@@ -283,24 +283,28 @@ def testing(service, role):
         )
     elif mode == "Live Groq":
         st.info(
-            "Live Groq mengirim data sintetis ke model yang dikonfigurasi. Maksimal 3 skenario per eksekusi; token aktual dicatat jika provider mengembalikannya."
+            "Live Groq mengirim data sintetis ke model yang dikonfigurasi. Semua skenario dapat dipilih dan dijalankan berurutan; token aktual dicatat jika provider mengembalikannya."
         )
     else:
         st.caption(
             "Local menguji pencarian, konteks, draft dasar, dan persetujuan tanpa panggilan model."
         )
+    select_all = st.checkbox("Pilih semua skenario", key="eval_all_" + mode)
+    if select_all:
+        st.session_state["eval_cases_" + mode] = list(labels)
     selected = st.multiselect(
         "Skenario evaluasi",
         list(labels),
         default=list(labels) if mode != "Live Groq" else ["draft"],
         format_func=lambda value: labels[value],
         key="eval_cases_" + mode,
+        disabled=select_all,
     )
     if st.button(
         "Jalankan evaluasi",
         key="eval_run",
         type="primary",
-        disabled=not selected or (mode == "Live Groq" and len(selected) > 3),
+        disabled=not selected,
     ):
         key = groq_key() if mode == "Live Groq" else ""
         if mode == "Live Groq" and not key:

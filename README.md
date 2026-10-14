@@ -211,7 +211,8 @@ are used or mutated. Opening or refreshing the page never starts evaluation.
 - **Mock** tests model-output contracts and grounding with deterministic simulated responses; it does
   not measure live model quality.
 - **Live Groq** uses the configured model/key on synthetic data only, and requires an explicit click.
-  Select at most three scenarios per run. Missing keys prevent execution. Provider failures/fallbacks
+  Select any subset or use **Pilih semua skenario** to run the full suite sequentially in one run.
+  Missing keys prevent execution. Provider failures/fallbacks
   are visible in results; draft scenarios require validated AI prose to pass in Mock/Live modes.
 
 Evaluation runs, checks, synthetic transcripts/drafts/traces and manual reviews persist in the separate
