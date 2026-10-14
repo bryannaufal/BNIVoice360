@@ -15,9 +15,9 @@ from bnivoice360.ui.source_routing_graph import (
 
 
 def render(services: AppServices) -> None:
-    # 1. Header component identical to Graph Analytics page
+    # 1. Header component
     header(
-        "Source–Issue–Routing Graph",
+        "Graph Analytics",
         "Analisis jaringan heterogen interaktif: menelusuri aliran suara nasabah dari kanal sumber, klaster topik hasil pemodelan, hingga unit eskalasi dan urgensi.",
         "BNIVoice360 · Graph Analytics",
     )
@@ -28,26 +28,32 @@ def render(services: AppServices) -> None:
         st.info("Belum ada data VoC. Data Admin dapat mengimpor data di Data Ingestion.")
         return
 
+    valid_dates = pd.to_datetime(frame["date_posted"], errors="coerce").dropna()
+    if not valid_dates.empty:
+        min_date = valid_dates.min().date()
+        max_date = valid_dates.max().date()
+    else:
+        min_date = None
+        max_date = None
+
+    topic_mode = "modeled"
+
     # 3. Interactive Controls Panel
     with st.expander("Filter & Pengaturan Pemetaan Jaringan", expanded=True):
         f_col1, f_col2, f_col3 = st.columns(3)
         with f_col1:
-            topic_mode_choice = st.radio(
-                "Mode Topik / Isu",
-                [
-                    "Klaster Topic Modeling (BERTopic)",
-                    "Kategori Makro Prototype (7 Kategori)",
-                ],
-                key="sir_topic_mode",
-                horizontal=False,
-            )
-            topic_mode = (
-                "prototype"
-                if "Prototype" in topic_mode_choice
-                else "modeled"
-            )
+            if min_date and max_date:
+                selected_dates = st.date_input(
+                    "Rentang Tanggal (Date Range)",
+                    value=(min_date, max_date),
+                    min_value=min_date,
+                    max_value=max_date,
+                    key="sir_date_range",
+                    help="Filter suara nasabah berdasarkan rentang tanggal publikasi.",
+                )
+            else:
+                selected_dates = None
 
-        with f_col2:
             channels = sorted(frame["source"].unique())
             selected_channels = st.multiselect(
                 "Kanal Sumber (Source)",
@@ -55,6 +61,8 @@ def render(services: AppServices) -> None:
                 default=channels,
                 key="sir_channels",
             )
+
+        with f_col2:
             sentiments = ["Negative", "Neutral", "Positive"]
             selected_sentiments = st.multiselect(
                 "Sentimen",
@@ -62,8 +70,6 @@ def render(services: AppServices) -> None:
                 default=sentiments,
                 key="sir_sentiments",
             )
-
-        with f_col3:
             statuses = ["Open", "Escalated", "Resolved"]
             selected_statuses = st.multiselect(
                 "Status Eskalasi",
@@ -73,37 +79,42 @@ def render(services: AppServices) -> None:
             )
             urgent_only = st.checkbox("Hanya Suara Urgent", key="sir_urgent")
 
-        # Mode-specific options
-        s_col1, s_col2 = st.columns(2)
-        if topic_mode == "modeled":
-            with s_col1:
-                top_n = st.slider(
-                    "Jumlah Topik Teratas Ditampilkan (Top N)",
-                    min_value=5,
-                    max_value=30,
-                    value=10,
-                    step=1,
-                    key="sir_top_n",
-                    help="Mengatur berapa banyak klaster hasil topic modeling yang ditampilkan pada kolom tengah.",
-                )
-            with s_col2:
-                include_other = st.checkbox(
-                    "Gabungkan sisa topik di luar Top N ke 'Topik Lainnya'",
-                    value=True,
-                    key="sir_include_other",
-                )
-                include_outliers = st.checkbox(
-                    "Sertakan Outlier & Unlabeled",
-                    value=False,
-                    key="sir_include_outliers",
-                )
-        else:
-            top_n = 7
-            include_other = True
-            include_outliers = True
+        with f_col3:
+            top_n = st.slider(
+                "Jumlah Topik Teratas Ditampilkan (Top N)",
+                min_value=5,
+                max_value=30,
+                value=10,
+                step=1,
+                key="sir_top_n",
+                help="Mengatur berapa banyak klaster hasil topic modeling yang ditampilkan pada kolom tengah.",
+            )
+            include_other = st.checkbox(
+                "Gabungkan sisa topik di luar Top N ke 'Topik Lainnya'",
+                value=True,
+                key="sir_include_other",
+            )
+            include_outliers = st.checkbox(
+                "Sertakan Outlier & Unlabeled",
+                value=False,
+                key="sir_include_outliers",
+            )
 
     # 4. Filter the data frame
     filtered = frame.copy()
+    if selected_dates:
+        f_dt = pd.to_datetime(filtered["date_posted"], errors="coerce").dt.date
+        if isinstance(selected_dates, (tuple, list)):
+            if len(selected_dates) == 2:
+                s_d, e_d = selected_dates
+                if min_date and max_date and (s_d > min_date or e_d < max_date):
+                    filtered = filtered.loc[f_dt.notna() & (f_dt >= s_d) & (f_dt <= e_d)]
+            elif len(selected_dates) == 1:
+                s_d = selected_dates[0]
+                filtered = filtered.loc[f_dt.notna() & (f_dt >= s_d)]
+        elif hasattr(selected_dates, "year"):
+            filtered = filtered.loc[f_dt.notna() & (f_dt == selected_dates)]
+
     if selected_channels:
         filtered = filtered.loc[filtered["source"].isin(selected_channels)]
     if selected_sentiments:
@@ -130,15 +141,11 @@ def render(services: AppServices) -> None:
     # 6. Interactive KPI Overview Cards
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Suara dalam Graf", f"{len(filtered):,}", f"dari {len(frame):,} total")
-    modeled_topic_count = (
-        len([t for t in graph_data["topic_nodes"] if t["id"] != "Topik Lainnya"])
-        if topic_mode == "modeled"
-        else len(graph_data["topic_nodes"])
-    )
+    modeled_topic_count = len([t for t in graph_data["topic_nodes"] if t["id"] != "Topik Lainnya"])
     kpi2.metric(
         "Topik Terpetakan",
         modeled_topic_count,
-        "Topik Modeling" if topic_mode == "modeled" else "Kategori Prototype",
+        "Klaster Topic Modeling",
     )
     kpi3.metric("Kanal Terbesar", highlights["largest_source"], f"{highlights['largest_source_count']:,} suara")
     kpi4.metric(
@@ -166,10 +173,10 @@ def render(services: AppServices) -> None:
             config={"displayModeBar": False, "responsive": True},
         )
         st.markdown(
-            "● **Source / Kanal** (Teal) &nbsp;&nbsp;&nbsp;&nbsp; "
-            "● **Issue / Topik** (Oranye) &nbsp;&nbsp;&nbsp;&nbsp; "
-            "● **Unit / Routing** (Ungu) &nbsp;&nbsp;&nbsp;&nbsp; "
-            "● **Urgent Priority** (Merah)"
+            ":blue[● **Source / Kanal**] &nbsp;&nbsp;&nbsp;&nbsp; "
+            ":orange[● **Issue / Topik**] &nbsp;&nbsp;&nbsp;&nbsp; "
+            ":violet[● **Unit / Routing**] &nbsp;&nbsp;&nbsp;&nbsp; "
+            ":red[● **Urgent Priority**]"
         )
 
     with tab_sankey:
@@ -178,6 +185,12 @@ def render(services: AppServices) -> None:
             fig_sankey,
             width="stretch",
             config={"displayModeBar": False, "responsive": True},
+        )
+        st.markdown(
+            ":blue[● **Source / Kanal**] &nbsp;&nbsp;&nbsp;&nbsp; "
+            ":orange[● **Issue / Topik**] &nbsp;&nbsp;&nbsp;&nbsp; "
+            ":violet[● **Unit / Routing**] &nbsp;&nbsp;&nbsp;&nbsp; "
+            ":red[● **Urgent Priority**]"
         )
 
     with tab_matrix:
@@ -215,9 +228,9 @@ def render(services: AppServices) -> None:
 
         quadrant_df = build_quadrant_matrix_data(
             filtered,
-            topic_mode=topic_mode,
-            min_volume=2 if topic_mode == "prototype" else 5,
-            top_n_topics=top_n if topic_mode == "modeled" else 7,
+            topic_mode="modeled",
+            min_volume=5,
+            top_n_topics=top_n,
         )
 
         if not quadrant_df.empty:
@@ -279,22 +292,37 @@ def render(services: AppServices) -> None:
         urg_cnt = int(node_voices["is_Urgent"].eq(1).sum()) if "is_Urgent" in node_voices.columns else 0
         d_col5.metric("Keluhan Urgent", urg_cnt)
 
-        with st.expander(f"Sampel Suara Nasabah Terkait '{selected_node}' ({len(node_voices)} suara)", expanded=True):
-            sample_voices = node_voices.head(6)
-            for _, v_row in sample_voices.iterrows():
-                with st.container(border=True):
-                    h_left, h_right = st.columns([4, 1])
-                    with h_left:
-                        meta_items = [f"**{v_row.get('source')}**", f"`{v_row.get('escalation_status', 'Open')}`"]
-                        if v_row.get("is_Urgent") == 1:
-                            meta_items.append("🚨 **URGENT**")
-                        st.markdown(" · ".join(meta_items))
-                    with h_right:
-                        date_str = str(v_row.get("date_posted", ""))[:10]
-                        if date_str:
-                            st.caption(date_str)
-                    content_text = str(v_row.get("content", ""))
-                    st.write(f'"{content_text}"')
+        with st.expander(f"Daftar Suara Nasabah Terkait '{selected_node}' ({len(node_voices)} suara)", expanded=True):
+            if len(node_voices) == 0:
+                st.info(f"Tidak ada suara nasabah yang terkait dengan klaster '{selected_node}'.")
+            else:
+                with st.container(height=450):
+                    for idx, (_, v_row) in enumerate(node_voices.iterrows(), start=1):
+                        with st.container(border=True):
+                            h_left, h_right = st.columns([4, 1])
+                            with h_left:
+                                meta_items = [
+                                    f"**Suara #{idx}**",
+                                    f"Kanal: **{v_row.get('source', '-')}**",
+                                    f"`{v_row.get('escalation_status', 'Open')}`",
+                                ]
+                                sentiment = v_row.get("sentiment")
+                                if sentiment:
+                                    sent_color = (
+                                        ":red"
+                                        if sentiment == "Negative"
+                                        else (":green" if sentiment == "Positive" else ":orange")
+                                    )
+                                    meta_items.append(f"Sentimen: {sent_color}[**{sentiment}**]")
+                                if v_row.get("is_Urgent") == 1:
+                                    meta_items.append("🚨 **URGENT**")
+                                st.markdown(" · ".join(meta_items))
+                            with h_right:
+                                date_str = str(v_row.get("date_posted", ""))[:10]
+                                if date_str:
+                                    st.caption(f"📅 **{date_str}**")
+                            content_text = str(v_row.get("content", ""))
+                            st.write(f'"{content_text}"')
 
     # 9. Detailed Data Matrix Expander
     with st.expander("Detail Matriks Suara Nasabah (Kanal ➔ Topik ➔ Unit Terkait)", expanded=False):

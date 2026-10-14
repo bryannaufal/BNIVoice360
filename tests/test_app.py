@@ -17,7 +17,6 @@ def test_every_page_renders_and_roles_hide_admin_navigation(streamlit_app):
     assert "Data Ingestion" not in app.sidebar.radio(key="current_page").options
     for title in (
         "Issue Analytics & Voice Feed",
-        "Source–Issue–Routing Graph",
         "Graph Analytics",
         "BNIVoice360 Companion",
         "Home",

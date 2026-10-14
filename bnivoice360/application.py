@@ -10,7 +10,6 @@ from bnivoice360.data.embeddings import ensure_embeddings
 from bnivoice360.pages import (
     companion,
     companion_evaluation,
-    graph,
     home,
     ingestion,
     issues,
@@ -24,8 +23,7 @@ PAGES = {
     "Home": home.render,
     "Data Ingestion": ingestion.render,
     "Issue Analytics & Voice Feed": issues.render,
-    "Source–Issue–Routing Graph": source_routing_graph.render,
-    "Graph Analytics": graph.render,
+    "Graph Analytics": source_routing_graph.render,
     "BNIVoice360 Companion": companion.render,
     "Companion Evaluation": companion_evaluation.render,
 }
