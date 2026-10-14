@@ -83,13 +83,13 @@ class Settings:
     topic_embedding_url: str = field(
         default_factory=lambda: os.environ.get(
             "BNIVOICE360_TOPIC_EMBEDDING_URL",
-            "https://drive.usercontent.google.com/download?id=1-cnLo1sZFMCKatU45BbvYz_UBc4NQyal&export=download&confirm=t",
+            "https://drive.usercontent.google.com/download?id=1Gt3x4xIpcDZoQwzXgmgpg7nweNh-RSrs&export=download&confirm=t",
         )
     )
     data_embedding_url: str = field(
         default_factory=lambda: os.environ.get(
             "BNIVOICE360_DATA_EMBEDDING_URL",
-            "https://drive.usercontent.google.com/download?id=1jr7xecYrXVMI35TWeIOtp8wL7Uy3MxrF&export=download&confirm=t",
+            "https://drive.usercontent.google.com/download?id=16HeG768HT8B6fuupaoIV1DBWp2EDd9xx&export=download&confirm=t",
         )
     )
     agent_model: str = field(
