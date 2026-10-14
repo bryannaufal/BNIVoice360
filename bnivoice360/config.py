@@ -59,15 +59,13 @@ class Settings:
     topic_csv: str = field(
         default_factory=lambda: os.environ.get(
             "BNIVOICE360_TOPIC_CSV",
-            # "https://drive.google.com/uc?export=download&id=1WacFf0Q0-jk8tCYTjE_T8w115thxmwPq",
-            "https://drive.google.com/uc?export=download&id=1hFAqWr_m9i1ohSx_5oHccUsBm6gSzNOv",
+            "https://drive.google.com/uc?export=download&id=13JogqqXWxbVSuabTJjiCf4MeNCwUXthR",
         )
     )
     mapping_csv: str = field(
         default_factory=lambda: os.environ.get(
             "BNIVOICE360_MAPPING_CSV",
-            # "https://drive.google.com/uc?export=download&id=1l-7710H8kP5oWg8dWMFnui48-7aiSsrt",
-            "https://drive.google.com/uc?export=download&id=1Ip2V97-EZ0eKkeh9HD_ytDMnTPdmJFcr",
+            "https://drive.google.com/uc?export=download&id=1FGyw1M9bYnZt9uR5wjKboMyhm49ZHN63",
         )
     )
     download_embeddings: bool = field(
