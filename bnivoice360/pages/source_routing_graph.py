@@ -1,5 +1,7 @@
 """Source–Issue–Routing Graph Analytics page, dynamically powered by VoC repository data."""
 
+import json
+
 import pandas as pd
 import streamlit as st
 
@@ -166,12 +168,53 @@ def render(services: AppServices) -> None:
     )
 
     with tab_network:
-        fig_network = create_source_routing_figure(graph_data)
-        st.plotly_chart(
+        active_sel = st.session_state.get("sir_active_selection")
+        fig_network = create_source_routing_figure(
+            graph_data,
+            selected_item=active_sel,
+        )
+        chart_event = st.plotly_chart(
             fig_network,
             width="stretch",
             config={"displayModeBar": False, "responsive": True},
+            key="sir_hetero_graph_chart",
+            on_select="rerun",
+            selection_mode="points",
         )
+
+        # Process node / edge click event
+        if chart_event:
+            points = chart_event.get("selection", {}).get("points", [])
+            sig = json.dumps(points, sort_keys=True, default=str)
+            if sig != st.session_state.get("sir_last_point_sig"):
+                st.session_state["sir_last_point_sig"] = sig
+                if points:
+                    cd = points[0].get("customdata", [])
+                    if isinstance(cd, (list, tuple)) and len(cd) >= 4:
+                        if cd[0] == "node":
+                            new_sel = {
+                                "type": "node",
+                                "layer": cd[1],
+                                "id": cd[2],
+                                "name": cd[3],
+                                "count": cd[4],
+                            }
+                            st.session_state["sir_active_selection"] = new_sel
+                            if cd[1] == "topic":
+                                st.session_state["sir_selected_node"] = cd[2]
+                            st.rerun()
+                        elif cd[0] == "edge":
+                            new_sel = {
+                                "type": "edge",
+                                "edge_type": cd[1],
+                                "source": cd[2],
+                                "target": cd[3],
+                                "weight": cd[4],
+                                "label": cd[5] if len(cd) > 5 else cd[2],
+                            }
+                            st.session_state["sir_active_selection"] = new_sel
+                            st.rerun()
+
         st.markdown(
             ":blue[● **Source / Kanal**] &nbsp;&nbsp;&nbsp;&nbsp; "
             ":orange[● **Issue / Topik**] &nbsp;&nbsp;&nbsp;&nbsp; "
@@ -265,64 +308,146 @@ def render(services: AppServices) -> None:
     st.subheader("🔍 Investigasi Mendalam Node & Suara Nasabah Asli")
 
     topic_names = [t["name"] for t in graph_data["topic_nodes"]]
-    if topic_names:
-        selected_node = st.selectbox(
-            "Pilih Klaster Topik untuk Investigasi Mendalam:",
-            topic_names,
-            key="sir_selected_node",
-        )
+    proc_df = graph_data["processed_frame"]
+    active_sel = st.session_state.get("sir_active_selection")
 
-        proc_df = graph_data["processed_frame"]
-        node_voices = proc_df.loc[proc_df["computed_topic"].eq(selected_node)]
+    if active_sel:
+        inf_col, btn_col = st.columns([4, 1])
+        with inf_col:
+            if active_sel["type"] == "node":
+                layer_lbl = {
+                    "source": "Kanal Sumber",
+                    "topic": "Klaster Topik",
+                    "routing": "Unit / Routing",
+                }.get(active_sel.get("layer"), "Node")
+                node_name = active_sel.get("name", active_sel.get("id"))
+                st.info(
+                    f"🎯 **Node Terpilih dari Graf:** {layer_lbl} **'{node_name}'** ({active_sel.get('count', 0):,} suara) — "
+                    "KPI dan daftar suara di bawah telah disesuaikan."
+                )
+            elif active_sel["type"] == "edge":
+                st.info(
+                    f"🌊 **Garis Aliran Terpilih dari Graf:** **'{active_sel.get('source')}' ➔ '{active_sel.get('target')}'** "
+                    f"({active_sel.get('weight', 0):,} suara) — "
+                    "KPI dan daftar suara di bawah telah disesuaikan."
+                )
+        with btn_col:
+            if st.button("✖ Reset Pilihan", key="sir_btn_reset_sel"):
+                st.session_state["sir_active_selection"] = None
+                st.session_state["sir_last_point_sig"] = ""
+                st.rerun()
 
-        # 5 KPIs ordered: Volume Suara Topik, Keterlibatan IT, Keterlibatan Operasional, Keterlibatan Bisnis, Keluhan Urgent
-        d_col1, d_col2, d_col3, d_col4, d_col5 = st.columns(5)
-        d_col1.metric("Volume Suara Topik", f"{len(node_voices):,}")
+        # Compute filtered node_voices based on active_sel
+        if active_sel["type"] == "node":
+            layer = active_sel.get("layer")
+            node_id = active_sel.get("id")
+            if layer == "source":
+                scope_label = f"Kanal '{active_sel.get('name', node_id)}'"
+                node_voices = proc_df.loc[proc_df["source"].eq(node_id)]
+            elif layer == "routing":
+                scope_label = f"Unit / Routing '{node_id}'"
+                if node_id == "IT":
+                    node_voices = proc_df.loc[proc_df["is_IT"].eq(1)]
+                elif node_id in ("Operasional", "Ops"):
+                    ops_col_name = "is_OPS" if "is_OPS" in proc_df.columns else "is_Operasional"
+                    node_voices = proc_df.loc[proc_df[ops_col_name].eq(1)]
+                elif node_id == "Bisnis":
+                    node_voices = proc_df.loc[proc_df["is_Bisnis"].eq(1)]
+                elif node_id == "Urgent":
+                    node_voices = proc_df.loc[proc_df["is_Urgent"].eq(1)]
+                else:
+                    node_voices = proc_df
+            else:  # topic
+                scope_label = f"Klaster Topik '{node_id}'"
+                node_voices = proc_df.loc[proc_df["computed_topic"].eq(node_id)]
+        elif active_sel["type"] == "edge":
+            src = active_sel.get("source")
+            tgt = active_sel.get("target")
+            edge_type = active_sel.get("edge_type")
+            if edge_type == "source_topic":
+                scope_label = f"Aliran '{src}' ➔ '{tgt}'"
+                node_voices = proc_df.loc[proc_df["source"].eq(src) & proc_df["computed_topic"].eq(tgt)]
+            else:  # topic_routing
+                scope_label = f"Aliran '{src}' ➔ '{tgt}'"
+                topic_match = proc_df["computed_topic"].eq(src)
+                if tgt == "IT":
+                    route_match = proc_df["is_IT"].eq(1)
+                elif tgt in ("Operasional", "Ops"):
+                    ops_col_name = "is_OPS" if "is_OPS" in proc_df.columns else "is_Operasional"
+                    route_match = proc_df[ops_col_name].eq(1)
+                elif tgt == "Bisnis":
+                    route_match = proc_df["is_Bisnis"].eq(1)
+                elif tgt == "Urgent":
+                    route_match = proc_df["is_Urgent"].eq(1)
+                else:
+                    route_match = pd.Series(True, index=proc_df.index)
+                node_voices = proc_df.loc[topic_match & route_match]
+        else:
+            scope_label = "Semua Suara"
+            node_voices = proc_df
+    else:
+        # Default topic selection
+        if topic_names:
+            selected_node = st.selectbox(
+                "Pilih Klaster Topik untuk Investigasi Mendalam:",
+                topic_names,
+                key="sir_selected_node",
+            )
+            scope_label = f"Klaster '{selected_node}'"
+            node_voices = proc_df.loc[proc_df["computed_topic"].eq(selected_node)]
+        else:
+            selected_node = ""
+            scope_label = "Klaster"
+            node_voices = pd.DataFrame()
 
-        it_pct = (node_voices["is_IT"].eq(1).mean() * 100) if "is_IT" in node_voices.columns and len(node_voices) else 0.0
-        d_col2.metric("Keterlibatan IT", f"{it_pct:.1f}%")
+    # 5 KPIs ordered: Volume Suara Topik, Keterlibatan IT, Keterlibatan Operasional, Keterlibatan Bisnis, Keluhan Urgent
+    d_col1, d_col2, d_col3, d_col4, d_col5 = st.columns(5)
+    d_col1.metric("Volume Suara Terpilih", f"{len(node_voices):,}")
 
-        ops_col = "is_OPS" if "is_OPS" in node_voices.columns else "is_Operasional"
-        ops_pct = (node_voices[ops_col].eq(1).mean() * 100) if ops_col in node_voices.columns and len(node_voices) else 0.0
-        d_col3.metric("Keterlibatan Operasional", f"{ops_pct:.1f}%")
+    it_pct = (node_voices["is_IT"].eq(1).mean() * 100) if "is_IT" in node_voices.columns and len(node_voices) else 0.0
+    d_col2.metric("Keterlibatan IT", f"{it_pct:.1f}%")
 
-        bisnis_pct = (node_voices["is_Bisnis"].eq(1).mean() * 100) if "is_Bisnis" in node_voices.columns and len(node_voices) else 0.0
-        d_col4.metric("Keterlibatan Bisnis", f"{bisnis_pct:.1f}%")
+    ops_col = "is_OPS" if "is_OPS" in node_voices.columns else "is_Operasional"
+    ops_pct = (node_voices[ops_col].eq(1).mean() * 100) if ops_col in node_voices.columns and len(node_voices) else 0.0
+    d_col3.metric("Keterlibatan Operasional", f"{ops_pct:.1f}%")
 
-        urg_cnt = int(node_voices["is_Urgent"].eq(1).sum()) if "is_Urgent" in node_voices.columns else 0
-        d_col5.metric("Keluhan Urgent", urg_cnt)
+    bisnis_pct = (node_voices["is_Bisnis"].eq(1).mean() * 100) if "is_Bisnis" in node_voices.columns and len(node_voices) else 0.0
+    d_col4.metric("Keterlibatan Bisnis", f"{bisnis_pct:.1f}%")
 
-        with st.expander(f"Daftar Suara Nasabah Terkait '{selected_node}' ({len(node_voices)} suara)", expanded=True):
-            if len(node_voices) == 0:
-                st.info(f"Tidak ada suara nasabah yang terkait dengan klaster '{selected_node}'.")
-            else:
-                with st.container(height=450):
-                    for idx, (_, v_row) in enumerate(node_voices.iterrows(), start=1):
-                        with st.container(border=True):
-                            h_left, h_right = st.columns([4, 1])
-                            with h_left:
-                                meta_items = [
-                                    f"**Suara #{idx}**",
-                                    f"Kanal: **{v_row.get('source', '-')}**",
-                                    f"`{v_row.get('escalation_status', 'Open')}`",
-                                ]
-                                sentiment = v_row.get("sentiment")
-                                if sentiment:
-                                    sent_color = (
-                                        ":red"
-                                        if sentiment == "Negative"
-                                        else (":green" if sentiment == "Positive" else ":orange")
-                                    )
-                                    meta_items.append(f"Sentimen: {sent_color}[**{sentiment}**]")
-                                if v_row.get("is_Urgent") == 1:
-                                    meta_items.append("🚨 **URGENT**")
-                                st.markdown(" · ".join(meta_items))
-                            with h_right:
-                                date_str = str(v_row.get("date_posted", ""))[:10]
-                                if date_str:
-                                    st.caption(f"📅 **{date_str}**")
-                            content_text = str(v_row.get("content", ""))
-                            st.write(f'"{content_text}"')
+    urg_cnt = int(node_voices["is_Urgent"].eq(1).sum()) if "is_Urgent" in node_voices.columns else 0
+    d_col5.metric("Keluhan Urgent", urg_cnt)
+
+    with st.expander(f"Daftar Suara Nasabah Terkait {scope_label} ({len(node_voices)} suara)", expanded=True):
+        if len(node_voices) == 0:
+            st.info(f"Tidak ada suara nasabah yang terkait dengan {scope_label}.")
+        else:
+            with st.container(height=450):
+                for idx, (_, v_row) in enumerate(node_voices.iterrows(), start=1):
+                    with st.container(border=True):
+                        h_left, h_right = st.columns([4, 1])
+                        with h_left:
+                            meta_items = [
+                                f"**Suara #{idx}**",
+                                f"Kanal: **{v_row.get('source', '-')}**",
+                                f"`{v_row.get('escalation_status', 'Open')}`",
+                            ]
+                            sentiment = v_row.get("sentiment")
+                            if sentiment:
+                                sent_color = (
+                                    ":red"
+                                    if sentiment == "Negative"
+                                    else (":green" if sentiment == "Positive" else ":orange")
+                                )
+                                meta_items.append(f"Sentimen: {sent_color}[**{sentiment}**]")
+                            if v_row.get("is_Urgent") == 1:
+                                meta_items.append("🚨 **URGENT**")
+                            st.markdown(" · ".join(meta_items))
+                        with h_right:
+                            date_str = str(v_row.get("date_posted", ""))[:10]
+                            if date_str:
+                                st.caption(f"📅 **{date_str}**")
+                        content_text = str(v_row.get("content", ""))
+                        st.write(f'"{content_text}"')
 
     # 9. Detailed Data Matrix Expander
     with st.expander("Detail Matriks Suara Nasabah (Kanal ➔ Topik ➔ Unit Terkait)", expanded=False):

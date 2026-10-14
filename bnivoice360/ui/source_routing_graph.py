@@ -222,8 +222,12 @@ def prepare_graph_data(
     }
 
 
-def create_source_routing_figure(graph_data: dict, height: int | None = None) -> go.Figure:
-    """Build the 3-layer Source–Issue–Routing Network Graph."""
+def create_source_routing_figure(
+    graph_data: dict,
+    height: int | None = None,
+    selected_item: dict | None = None,
+) -> go.Figure:
+    """Build the 3-layer Source–Issue–Routing Network Graph with interactive selection."""
     source_nodes = graph_data["source_nodes"]
     topic_nodes = graph_data["topic_nodes"]
     routing_nodes = graph_data["routing_nodes"]
@@ -240,6 +244,15 @@ def create_source_routing_figure(graph_data: dict, height: int | None = None) ->
             ],
         )
         return fig
+
+    # Selection state flags
+    has_selection = selected_item is not None
+    sel_type = selected_item.get("type") if has_selection else None
+    sel_layer = selected_item.get("layer") if has_selection else None
+    sel_id = selected_item.get("id") if has_selection else None
+    sel_src = selected_item.get("source") if has_selection else None
+    sel_tgt = selected_item.get("target") if has_selection else None
+    sel_edge_type = selected_item.get("edge_type") if has_selection else None
 
     # Calculate height dynamically based on topic node count to prevent overlapping
     n_topics = len(topic_nodes)
@@ -279,20 +292,59 @@ def create_source_routing_figure(graph_data: dict, height: int | None = None) ->
         if src_id in source_coords and topic_id in topic_coords:
             x0, y0, _ = source_coords[src_id]
             x1, y1, _ = topic_coords[topic_id]
+            xm = (x0 + x1) / 2
+            ym = (y0 + y1) / 2
 
             norm = weight / max_src_weight
-            line_width = max(1.0, min(10.0, 1.2 + norm * 8.0))
-            opacity = min(0.35, max(0.12, 0.12 + norm * 0.22))
+            base_width = max(1.0, min(10.0, 1.2 + norm * 8.0))
+            base_opacity = min(0.35, max(0.12, 0.12 + norm * 0.22))
             src_label = SOURCE_DISPLAY_MAP.get(src_id, src_id)
+
+            if not has_selection:
+                line_width = base_width
+                line_opacity = base_opacity
+                marker_size = [0, 8, 0]
+                marker_color = f"rgba(0, 128, 128, {min(0.85, base_opacity + 0.3):.2f})"
+            else:
+                if sel_type == "node":
+                    if sel_layer == "source" and src_id == sel_id:
+                        is_active = True
+                    elif sel_layer == "topic" and topic_id == sel_id:
+                        is_active = True
+                    else:
+                        is_active = False
+                elif sel_type == "edge":
+                    is_active = (sel_edge_type == "source_topic" and src_id == sel_src and topic_id == sel_tgt)
+                else:
+                    is_active = False
+
+                if is_active:
+                    line_width = max(3.5, base_width * 1.6)
+                    line_opacity = 0.90
+                    marker_size = [0, 10, 0]
+                    marker_color = "#008080"
+                else:
+                    line_width = 1.0
+                    line_opacity = 0.05
+                    marker_size = [0, 0, 0]
+                    marker_color = "rgba(0, 128, 128, 0.05)"
+
+            edge_cd = [
+                ["edge", "source_topic", src_id, topic_id, weight, src_label],
+                ["edge", "source_topic", src_id, topic_id, weight, src_label],
+                ["edge", "source_topic", src_id, topic_id, weight, src_label],
+            ]
 
             figure.add_trace(
                 go.Scatter(
-                    x=[x0, x1],
-                    y=[y0, y1],
-                    mode="lines",
-                    line=dict(color=f"rgba(0, 128, 128, {opacity:.2f})", width=line_width),
+                    x=[x0, xm, x1],
+                    y=[y0, ym, y1],
+                    mode="lines+markers",
+                    line=dict(color=f"rgba(0, 128, 128, {line_opacity:.2f})", width=line_width),
+                    marker=dict(size=marker_size, color=marker_color, symbol="circle"),
                     hoverinfo="text",
-                    hovertext=f"<b>{src_label} ➔ {topic_id}</b><br>Volume: {weight:,} suara",
+                    hovertext=f"<b>Aliran: {src_label} ➔ {topic_id}</b><br>Volume: {weight:,} suara<br><i>Klik garis untuk investigasi aliran ini</i>",
+                    customdata=edge_cd,
                     showlegend=False,
                 )
             )
@@ -303,20 +355,59 @@ def create_source_routing_figure(graph_data: dict, height: int | None = None) ->
         if topic_id in topic_coords and route_id in routing_coords:
             x0, y0, _ = topic_coords[topic_id]
             x1, y1, _ = routing_coords[route_id]
+            xm = (x0 + x1) / 2
+            ym = (y0 + y1) / 2
 
             norm = weight / max_tr_weight
-            line_width = max(1.0, min(12.0, 1.2 + norm * 9.5))
-            opacity = min(0.35, max(0.12, 0.12 + norm * 0.20))
-            color_base = "229, 83, 0" if route_id == "IT" else "94, 75, 139"
+            base_width = max(1.0, min(12.0, 1.2 + norm * 9.5))
+            base_opacity = min(0.35, max(0.12, 0.12 + norm * 0.20))
+            color_base = "229, 83, 0" if route_id == "IT" else ("192, 57, 43" if route_id == "Urgent" else "94, 75, 139")
+
+            if not has_selection:
+                line_width = base_width
+                line_opacity = base_opacity
+                marker_size = [0, 8, 0]
+                marker_color = f"rgba({color_base}, {min(0.85, base_opacity + 0.3):.2f})"
+            else:
+                if sel_type == "node":
+                    if sel_layer == "topic" and topic_id == sel_id:
+                        is_active = True
+                    elif sel_layer == "routing" and route_id == sel_id:
+                        is_active = True
+                    else:
+                        is_active = False
+                elif sel_type == "edge":
+                    is_active = (sel_edge_type == "topic_routing" and topic_id == sel_src and route_id == sel_tgt)
+                else:
+                    is_active = False
+
+                if is_active:
+                    line_width = max(3.5, base_width * 1.6)
+                    line_opacity = 0.90
+                    marker_size = [0, 10, 0]
+                    marker_color = f"rgb({color_base})"
+                else:
+                    line_width = 1.0
+                    line_opacity = 0.05
+                    marker_size = [0, 0, 0]
+                    marker_color = f"rgba({color_base}, 0.05)"
+
+            edge_cd = [
+                ["edge", "topic_routing", topic_id, route_id, weight, route_id],
+                ["edge", "topic_routing", topic_id, route_id, weight, route_id],
+                ["edge", "topic_routing", topic_id, route_id, weight, route_id],
+            ]
 
             figure.add_trace(
                 go.Scatter(
-                    x=[x0, x1],
-                    y=[y0, y1],
-                    mode="lines",
-                    line=dict(color=f"rgba({color_base}, {opacity:.2f})", width=line_width),
+                    x=[x0, xm, x1],
+                    y=[y0, ym, y1],
+                    mode="lines+markers",
+                    line=dict(color=f"rgba({color_base}, {line_opacity:.2f})", width=line_width),
+                    marker=dict(size=marker_size, color=marker_color, symbol="circle"),
                     hoverinfo="text",
-                    hovertext=f"<b>{topic_id} ➔ {route_id}</b><br>Volume: {weight:,} suara",
+                    hovertext=f"<b>Aliran: {topic_id} ➔ {route_id}</b><br>Volume: {weight:,} suara<br><i>Klik garis untuk investigasi aliran ini</i>",
+                    customdata=edge_cd,
                     showlegend=False,
                 )
             )
@@ -324,24 +415,24 @@ def create_source_routing_figure(graph_data: dict, height: int | None = None) ->
     annotations = []
 
     # 3. Draw Nodes (Layer by Layer)
-    def render_layer(coords_dict, layer_name, default_size=36):
+    def render_layer(coords_dict, layer_name, layer_code, default_size=36):
         x_vals = []
         y_vals = []
         marker_texts = []
         hover_texts = []
         bg_colors = []
         border_colors = []
+        border_widths = []
         sizes = []
         text_colors = []
+        node_cds = []
 
         for node_id, (x, y, node) in coords_dict.items():
             x_vals.append(x)
             y_vals.append(y)
-            bg_colors.append(node["bg"])
-            border_colors.append(node["border"])
-            hover_texts.append(
-                f"<b>{node['name']}</b><br>Kategori: {layer_name}<br>Total Suara: {node['count']:,}"
-            )
+
+            is_sel_node = (has_selection and sel_type == "node" and sel_id == node["id"] and sel_layer == layer_code)
+            is_edge_end = (has_selection and sel_type == "edge" and (node["id"] == sel_src or node["id"] == sel_tgt))
 
             # Node size dynamically scaled by volume
             size = default_size
@@ -349,16 +440,34 @@ def create_source_routing_figure(graph_data: dict, height: int | None = None) ->
                 size = max(32, min(58, 30 + int((node["count"] / max(1, topic_nodes[0]["count"])) * 24)))
             elif layer_name == "Routing / Priority":
                 size = 56 if node["id"] == "IT" else 46
-            sizes.append(size)
 
-            # Text inside node
+            if is_sel_node or is_edge_end:
+                size += 6
+                border_width = 4.0
+                border_color = "#0F172A"
+                bg_color = node["bg"]
+                text_color = "#0F172A"
+            else:
+                border_width = 2.2
+                border_color = node["border"]
+                bg_color = node["bg"]
+                text_color = node["border"]
+
+            sizes.append(size)
+            border_widths.append(border_width)
+            border_colors.append(border_color)
+            bg_colors.append(bg_color)
+            text_colors.append(text_color)
             marker_texts.append(f"<b>{node['count']:,}</b>")
-            text_colors.append(node["border"])
+            hover_texts.append(
+                f"<b>{node['name']}</b><br>Kategori: {layer_name}<br>Total Suara: {node['count']:,}<br><i>Klik node untuk investigasi mendalam</i>"
+            )
+            node_cds.append(["node", layer_code, node["id"], node["name"], node["count"]])
 
             # Node label annotation
             name_text = node["name"]
-            # Truncate label cleanly if very long
             display_name = name_text if len(name_text) <= 24 else name_text[:22] + "…"
+            label_font_color = "#0F172A" if (is_sel_node or is_edge_end) else "#334155"
             annotations.append(
                 dict(
                     x=x,
@@ -367,7 +476,7 @@ def create_source_routing_figure(graph_data: dict, height: int | None = None) ->
                     yref="y",
                     text=f"<b>{display_name}</b>",
                     showarrow=False,
-                    font=dict(size=10, color="#1E293B", family="Inter, Arial"),
+                    font=dict(size=10, color=label_font_color, family="Inter, Arial"),
                     xanchor="center",
                     yanchor="bottom",
                 )
@@ -381,20 +490,21 @@ def create_source_routing_figure(graph_data: dict, height: int | None = None) ->
                 marker=dict(
                     size=sizes,
                     color=bg_colors,
-                    line=dict(color=border_colors, width=2.2),
+                    line=dict(color=border_colors, width=border_widths),
                 ),
                 text=marker_texts,
                 textposition="middle center",
                 textfont=dict(color=text_colors, family="Inter, Arial", size=10),
                 hoverinfo="text",
                 hovertext=hover_texts,
+                customdata=node_cds,
                 showlegend=False,
             )
         )
 
-    render_layer(source_coords, "Source", default_size=36)
-    render_layer(topic_coords, "Issue / Topic", default_size=40)
-    render_layer(routing_coords, "Routing / Priority", default_size=48)
+    render_layer(source_coords, "Source", "source", default_size=36)
+    render_layer(topic_coords, "Issue / Topic", "topic", default_size=40)
+    render_layer(routing_coords, "Routing / Priority", "routing", default_size=48)
 
     # Column Headers
     annotations.extend(
