@@ -287,7 +287,7 @@ def testing(service, role):
         )
     else:
         st.caption(
-            "Local menguji pencarian, konteks, draft dasar, dan persetujuan tanpa panggilan model."
+            "Local menguji tools dengan argumen skenario terstruktur, draft dasar, dan persetujuan; pemahaman bahasa memerlukan Mock/Live Groq."
         )
     select_all = st.checkbox("Pilih semua skenario", key="eval_all_" + mode)
     if select_all:

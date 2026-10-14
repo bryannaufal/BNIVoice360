@@ -1,4 +1,4 @@
-"""Conversation provenance, ambiguity, provider boundaries, and real UI approval flows."""
+"""Typed workflow provenance, ambiguity, provider boundaries, and real UI approval flows."""
 
 import hashlib
 import json
@@ -17,8 +17,6 @@ from bnivoice360.services.agent.guardrails import GuardrailError
 from bnivoice360.services.agent.workflow import ReviewRequired
 from bnivoice360.services.companion_intent import (
     INTENT_SCHEMA,
-    explicit_period,
-    interpret,
     validate_schema,
 )
 from bnivoice360.services.companion_state import CompanionState, Stage
@@ -105,13 +103,13 @@ def companion(tmp_path):
     return services.conversation
 
 
-def talk(engine, state, text, **kwargs):
-    return engine.handle(state, text, SESSION, ROLE, today=TODAY, **kwargs)
+def talk(engine, state, arguments, **kwargs):
+    return engine.execute_workflow(state, arguments, SESSION, ROLE, today=TODAY, **kwargs)
 
 
 def choose(engine, state):
-    talk(engine, state, "Tampilkan issue QRIS 7 hari terakhir")
-    talk(engine, state, "pilih nomor 1")
+    talk(engine, state, {"action": "display", "keyword": "QRIS", "period": "7d"})
+    talk(engine, state, {"action": "select", "indices": [1]})
 
 
 def make_draft(engine, state):
@@ -122,22 +120,28 @@ def make_draft(engine, state):
 
 def test_vague_period_followup_search_count_sources_and_no_implicit_selection(companion):
     state = CompanionState()
-    reply = talk(companion, state, "Apakah ada issue terkait QRIS akhir-akhir ini?")
+    reply = talk(companion, state, {"action": "exists", "keyword": "QRIS", "ask_period": True})
     assert "7 hari" in reply and state.stage == Stage.PERIOD
     assert not state.result_ids and not state.selected_ids
-    reply = talk(companion, state, "1 minggu terakhir")
+    reply = talk(companion, state, {"action": "period", "period": "7d"})
     assert state.query.start == date(2026, 10, 5) and state.query.end == TODAY
     assert state.total == 3 and "3 keluhan" in reply
     assert state.stage == Stage.OFFER and not state.result_ids
-    talk(companion, state, "ya, tampilkan")
+    talk(companion, state, {"action": "display", "refinement": True})
     assert state.result_ids == ("q1", "q2", "done") and not state.selected_ids
-    talk(companion, state, "Tampilkan issue QRIS 7 hari terakhir dari PlayStore")
+    talk(
+        companion,
+        state,
+        {"action": "display", "keyword": "QRIS", "period": "7d", "sources": ["PlayStore"]},
+    )
     assert state.result_ids == ("q2",)
 
 
 def test_no_match_and_failure_are_distinct(companion, monkeypatch):
     state = CompanionState()
-    reply = talk(companion, state, 'Cari keluhan "tidak-ada-match" 7 hari terakhir')
+    reply = talk(
+        companion, state, {"action": "display", "keyword": "tidak-ada-match", "period": "7d"}
+    )
     assert "Tidak ditemukan" in reply and state.total == 0
     monkeypatch.setattr(
         companion.repository,
@@ -145,50 +149,52 @@ def test_no_match_and_failure_are_distinct(companion, monkeypatch):
         lambda: (_ for _ in ()).throw(sqlite3.OperationalError("failed")),
     )
     with pytest.raises(sqlite3.OperationalError):
-        talk(companion, state, "Cari keluhan QRIS 7 hari terakhir")
+        talk(companion, state, {"action": "display", "keyword": "QRIS", "period": "7d"})
 
 
 def test_selection_reference_by_number_id_phrase_and_ambiguity(companion):
     state = CompanionState()
-    talk(companion, state, "Cari issue QRIS 7 hari terakhir")
-    assert "Pilih" in talk(companion, state, "apakah ada keluhan serupa")
-    talk(companion, state, "yang saldo terpotong")
+    talk(companion, state, {"action": "display", "keyword": "QRIS", "period": "7d"})
+    assert "Pilih" in talk(companion, state, {"action": "similar"})
+    talk(companion, state, {"action": "select", "match_phrase": "saldo terpotong"})
     assert state.selected_ids == ("q1",)
-    talk(companion, state, "pilih nomor 2")
+    talk(companion, state, {"action": "select", "indices": [2]})
     assert state.selected_ids == ("q2",)
-    talk(companion, state, "pilih tiket q1")
+    talk(companion, state, {"action": "select", "indices": [1]})
     assert state.selected_ids == ("q1",)
-    reply = talk(companion, state, "yang QRIS gagal")
+    reply = talk(companion, state, {"action": "select", "match_phrase": "QRIS gagal"})
     assert "belum unik" in reply and state.selected_ids == ("q1",)
-    assert "Nomor tidak ada" in talk(companion, state, "pilih nomor 999")
+    assert "Nomor tidak ada" in talk(companion, state, {"action": "select", "indices": [999]})
 
 
 def test_similar_only_open_and_only_anchor_selected(companion):
     state = CompanionState()
     choose(companion, state)
-    reply = talk(companion, state, "apakah ada keluhan serupa")
+    reply = talk(companion, state, {"action": "similar"})
     assert state.result_kind == "similar" and state.result_ids == ("q1", "q2")
     assert state.selected_ids == ("q1",) and "1 kandidat" in reply
-    talk(companion, state, "pilih nomor 1 dan 2")
+    talk(companion, state, {"action": "select", "indices": [1, 2]})
     assert state.selected_ids == ("q1", "q2")
 
 
 def test_missing_embedding_never_becomes_no_candidates(companion):
     state = CompanionState()
-    talk(companion, state, "Cari issue login 7 hari terakhir")
-    talk(companion, state, "pilih nomor 1")
+    talk(companion, state, {"action": "display", "keyword": "login", "period": "7d"})
+    talk(companion, state, {"action": "select", "indices": [1]})
     with pytest.raises(ValueError, match="belum memiliki"):
-        talk(companion, state, "apakah ada keluhan serupa")
+        talk(companion, state, {"action": "similar"})
 
 
 def test_escalation_requires_selection_and_user_fields(companion):
     state = CompanionState()
-    reply = talk(companion, state, "saya ingin escalate keluhan tersebut")
+    reply = talk(companion, state, {"action": "escalate"})
     assert "Pilih keluhan" in reply and state.proposal is None
     choose(companion, state)
-    reply = talk(companion, state, "saya ingin escalate keluhan tersebut")
+    reply = talk(companion, state, {"action": "escalate"})
     assert state.stage == Stage.DETAILS and "unit tujuan" in reply
-    reply = talk(companion, state, "IT; permintaan: periksa status transaksi")
+    reply = talk(
+        companion, state, {"action": "details", "team": "IT", "request": "periksa status transaksi"}
+    )
     assert state.stage == Stage.DRAFT and state.proposal is not None
     assert "periksa status transaksi" in state.draft_text
     assert "PEMERIKSAAN" not in state.draft_text
@@ -294,12 +300,12 @@ def test_approval_and_new_search_cancel_preview(companion):
     assert companion.commit(state, SESSION, ROLE, approved=True) == 1
     assert state.proposal is None
     state = CompanionState()
-    talk(companion, state, "Cari issue QRIS 7 hari terakhir")
-    talk(companion, state, "pilih nomor 2")
+    talk(companion, state, {"action": "display", "keyword": "QRIS", "period": "7d"})
+    talk(companion, state, {"action": "select", "indices": [2]})
     companion.update_details(state, SESSION, "IT", "Periksa status.", "")
     companion.build_draft(state, SESSION, ROLE)
     operation = state.proposal.operation_id
-    talk(companion, state, "Cari issue ATM 30 hari terakhir")
+    talk(companion, state, {"action": "display", "keyword": "ATM", "period": "30d"})
     assert not state.selected_ids and not state.proposal and not state.draft_text
     with sqlite3.connect(companion.batch.audit.path) as connection:
         assert (
@@ -312,45 +318,18 @@ def test_approval_and_new_search_cancel_preview(companion):
 
 def test_resolved_complaint_can_produce_document_but_not_status_change(companion):
     state = CompanionState()
-    talk(companion, state, "Cari issue QRIS 7 hari terakhir")
-    talk(companion, state, "pilih nomor 3")
+    talk(companion, state, {"action": "display", "keyword": "QRIS", "period": "7d"})
+    talk(companion, state, {"action": "select", "indices": [3]})
     companion.update_details(state, SESSION, "IT", "Periksa tindak lanjut.", "")
     companion.build_draft(state, SESSION, ROLE)
     assert state.draft_text and state.proposal is None
 
 
-def test_strict_intent_schema_rejects_extra_actions_and_invented_fields(monkeypatch):
-    client = GroqClient("test", "openai/gpt-oss-20b")
-    values = dict(
-        action="search",
-        keyword="QRIS",
-        period="7d",
-        start=None,
-        end=None,
-        sources=[],
-        status=None,
-        indices=[],
-        team=None,
-        request=None,
-        examination=None,
-        cross_topic=False,
-        categories=None,
-        sentiments=None,
-        urgent_only=None,
-        refinement=False,
-    )
-    monkeypatch.setattr(
-        client, "structured", lambda *args: (values, {"tokens": 1, "duration_ms": 1})
-    )
-    with pytest.raises(GuardrailError, match="invented_user_field"):
-        interpret("Tolong telusuri pembayaran digital", CompanionState(), client)
+def test_workflow_schema_rejects_model_commits(companion):
+    from bnivoice360.services.companion_workflow import WORKFLOW_SCHEMA
+
     with pytest.raises(GuardrailError):
-        validate_schema({**values, "action": "commit"}, INTENT_SCHEMA)
-    values["keyword"] = "pembayaran digital"
-    intent, _ = interpret(
-        "Tolong telusuri pembayaran digital akhir-akhir ini", CompanionState(), client
-    )
-    assert intent.period is None  # Never accept an LLM's invented date range.
+        validate_schema({"action": "commit"}, WORKFLOW_SCHEMA)
 
 
 def test_groq_strict_request_and_invalid_response(monkeypatch):
@@ -380,13 +359,6 @@ def test_credentials_formats():
     assert resolve_groq_key({}) == ""
 
 
-def test_unsupported_period_is_not_silently_shortened():
-    assert explicit_period("17 hari terakhir")[0] is None
-    assert explicit_period("130 hari terakhir")[0] is None
-    assert explicit_period("7 hari terakhir")[0] == "7d"
-    assert explicit_period("30 hari terakhir")[0] == "30d"
-
-
 def test_ui_chat_selection_draft_confirmation_and_state_survive_navigation(companion, monkeypatch):
     monkeypatch.setenv("BNIVOICE360_DB_PATH", str(companion.batch.settings.database_path))
     monkeypatch.setenv(
@@ -394,10 +366,17 @@ def test_ui_chat_selection_draft_confirmation_and_state_survive_navigation(compa
     )
     app = AppTest.from_file(str(PROJECT_ROOT / "app.py"), default_timeout=30).run()
     app.sidebar.radio(key="current_page").set_value("BNIVoice360 Companion").run()
-    app.chat_input[0].set_value("Apakah ada issue QRIS akhir-akhir ini?").run()
+    companion.execute_workflow(
+        app.session_state["companion_context"],
+        {"action": "exists", "keyword": "QRIS", "ask_period": True},
+        SESSION,
+        ROLE,
+        today=TODAY,
+    )
+    app.run()
     assert not app.exception
     assert app.session_state["companion_context"].stage == Stage.PERIOD
-    app.button(key="companion_period_semua periode").click().run()
+    app.button(key="companion_period_all").click().run()
     assert not app.exception
     assert app.session_state["companion_context"].stage == Stage.OFFER
     app.button(key="companion_show_results").click().run()
@@ -446,9 +425,9 @@ def test_json_escaped_pii_is_screened_after_decode():
 @pytest.mark.parametrize(
     "question",
     [
-        "Apakah ada issue yang perlu segera ditindaklanjuti?",
-        "Adakah keluhan mendesak?",
-        "Are there any urgent complaints?",
+        {"action": "exists", "urgent_only": True},
+        {"action": "exists", "urgent_only": True},
+        {"action": "exists", "urgent_only": True},
     ],
 )
 def test_existence_offers_details_and_yes_rechecks_database(companion, question):
@@ -461,7 +440,7 @@ def test_existence_offers_details_and_yes_rechecks_database(companion, question)
     with pytest.raises(ReviewRequired):
         companion.select(state, ("q1",), SESSION)
     companion.repository.resolve("q1")
-    reply = talk(companion, state, "ya, tampilkan")
+    reply = talk(companion, state, {"action": "display", "refinement": True})
     assert state.stage == Stage.RESULTS and state.result_ids == ("q1",)
     assert companion.visible_rows(state).iloc[0]["escalation_status"] == "Resolved"
     assert not state.selected_ids
@@ -470,9 +449,9 @@ def test_existence_offers_details_and_yes_rechecks_database(companion, question)
 @pytest.mark.parametrize(
     "question",
     [
-        "Tampilkan issue IT yang masih Escalated",
-        "Apakah ada issue IT yang masih escalated?",
-        "Lihat keluhan IT yang sudah dieskalasi",
+        {"action": "display", "categories": ["IT"], "status": "Escalated"},
+        {"action": "exists", "categories": ["IT"], "status": "Escalated"},
+        {"action": "display", "categories": ["IT"], "status": "Escalated"},
     ],
 )
 def test_status_questions_do_not_escalate(companion, question):
@@ -498,16 +477,16 @@ def test_status_questions_do_not_escalate(companion, question):
     assert state.total == 1 and state.proposal is None and not state.selected_ids
     assert "Pilih keluhan yang dimaksud" not in reply
     if state.stage == Stage.OFFER:
-        talk(companion, state, "boleh")
+        talk(companion, state, {"action": "display", "refinement": True})
     assert state.result_ids == ("es1",)
 
 
 @pytest.mark.parametrize(
     "question",
     [
-        "Tampilkan issue terkait kartu kredit yang urgent dari Twitter",
-        "Tampilkan kartu kredit yang mendesak dari Twitter",
-        "Apakah ada keluhan tentang kartu kredit yang perlu segera ditindaklanjuti dari Twitter?",
+        {"action": "display", "keyword": "kartu kredit", "urgent_only": True, "sources": ["X"]},
+        {"action": "display", "keyword": "kartu kredit", "urgent_only": True, "sources": ["X"]},
+        {"action": "exists", "keyword": "kartu kredit", "urgent_only": True, "sources": ["X"]},
     ],
 )
 def test_arbitrary_topic_and_combined_filters(companion, question):
@@ -532,27 +511,37 @@ def test_arbitrary_topic_and_combined_filters(companion, question):
     assert state.query.sources == ("X",) and state.query.urgent_only
     assert state.total == 1
     if state.stage == Stage.OFFER:
-        talk(companion, state, "ya")
+        talk(companion, state, {"action": "display", "refinement": True})
     assert state.result_ids == ("cc1",)
-    talk(companion, state, "yang Bisnis saja")
+    talk(companion, state, {"action": "display", "refinement": True, "categories": ["Bisnis"]})
     assert state.query.categories == ("Bisnis",) and state.query.keyword.lower() == "kartu kredit"
-    talk(companion, state, "semua kategori")
+    talk(companion, state, {"action": "display", "refinement": True, "categories": []})
     assert state.query.categories == ()
 
 
 def test_refinements_preserve_scope_new_topic_resets_filters(companion):
     state = CompanionState()
-    talk(companion, state, "Tampilkan issue QRIS urgent 7 hari terakhir dari PlayStore")
+    talk(
+        companion,
+        state,
+        {
+            "action": "display",
+            "keyword": "QRIS",
+            "period": "7d",
+            "urgent_only": True,
+            "sources": ["PlayStore"],
+        },
+    )
     assert state.total == 0
-    talk(companion, state, "semua kanal")
+    talk(companion, state, {"action": "display", "refinement": True, "sources": []})
     assert state.result_ids == ("q1",) and state.query.sources == ()
-    talk(companion, state, "yang IT saja")
+    talk(companion, state, {"action": "display", "refinement": True, "categories": ["IT"]})
     assert state.query.categories == ("IT",) and state.query.urgent_only
-    talk(companion, state, "semua urgensi")
+    talk(companion, state, {"action": "display", "refinement": True, "urgent_only": False})
     assert not state.query.urgent_only and state.total == 3
-    talk(companion, state, "yang masih Open saja")
+    talk(companion, state, {"action": "display", "refinement": True, "status": "Open"})
     assert state.result_ids == ("q1", "q2")
-    talk(companion, state, "Tampilkan issue login")
+    talk(companion, state, {"action": "display", "keyword": "login"})
     assert state.query.keyword == "login" and state.query.status == "All"
     assert state.query.categories == () and state.query.start == date(2026, 9, 12)
     assert state.result_ids == ("other",)
@@ -560,11 +549,11 @@ def test_refinements_preserve_scope_new_topic_resets_filters(companion):
 
 def test_offer_decline_and_escalate_explicit_number(companion):
     state = CompanionState()
-    talk(companion, state, "Apakah ada keluhan QRIS?")
-    talk(companion, state, "tidak dulu")
+    talk(companion, state, {"action": "exists", "keyword": "QRIS"})
+    talk(companion, state, {"action": "dismiss"})
     assert state.stage == Stage.IDLE and not state.result_ids
-    talk(companion, state, "Tampilkan issue QRIS 7 hari terakhir")
-    talk(companion, state, "Escalate nomor 2")
+    talk(companion, state, {"action": "display", "keyword": "QRIS", "period": "7d"})
+    talk(companion, state, {"action": "escalate", "indices": [2]})
     assert state.selected_ids == ("q2",) and state.stage == Stage.DETAILS
     assert state.proposal is None
 
@@ -572,9 +561,9 @@ def test_offer_decline_and_escalate_explicit_number(companion):
 @pytest.mark.parametrize(
     "question",
     [
-        "Apa saja issue IT yang masih Escalated?",
-        "Issue IT yang masih Escalated?",
-        "Tampilkan issue dengan prioritas tinggi",
+        {"action": "display", "categories": ["IT"], "status": "Escalated"},
+        {"action": "exists", "categories": ["IT"], "status": "Escalated"},
+        {"action": "display", "urgent_only": True},
     ],
 )
 def test_more_read_variants_are_not_mutation_requests(companion, question):
@@ -586,28 +575,41 @@ def test_more_read_variants_are_not_mutation_requests(companion, question):
 
 def test_period_clarification_preserves_offer_and_explicit_filters(companion):
     state = CompanionState()
-    talk(companion, state, "Apakah ada issue QRIS akhir-akhir ini?")
-    talk(companion, state, "7 hari terakhir, IT dan urgent saja")
+    talk(companion, state, {"action": "exists", "keyword": "QRIS", "ask_period": True})
+    talk(
+        companion,
+        state,
+        {"action": "period", "period": "7d", "categories": ["IT"], "urgent_only": True},
+    )
     assert state.query.categories == ("IT",) and state.query.urgent_only
     assert state.stage == Stage.OFFER and state.total == 1
-    talk(companion, state, "tampilkan keluhan yang masih Open")
+    talk(companion, state, {"action": "display", "refinement": True, "status": "Open"})
     assert state.query.keyword == "QRIS" and state.result_ids == ("q1",)
 
 
 def test_operator_notes_and_combined_escalation_commands(companion):
     state = CompanionState()
     choose(companion, state)
-    talk(companion, state, "Saya ingin escalate keluhan tersebut")
+    talk(companion, state, {"action": "escalate"})
     talk(
         companion,
         state,
-        "IT; permintaan: pastikan tidak ada transaksi ganda; pemeriksaan: petugas sudah memeriksa mutasi",
+        {
+            "action": "details",
+            "team": "IT",
+            "request": "pastikan tidak ada transaksi ganda",
+            "examination": "petugas sudah memeriksa mutasi",
+        },
     )
     assert state.stage == Stage.DRAFT and state.selected_ids == ("q1",)
     assert state.request == "pastikan tidak ada transaksi ganda"
     state = CompanionState()
-    talk(companion, state, "Tampilkan keluhan QRIS 7 hari terakhir")
-    talk(companion, state, "Escalate nomor 2 ke IT; permintaan: periksa transaksi")
+    talk(companion, state, {"action": "display", "keyword": "QRIS", "period": "7d"})
+    talk(
+        companion,
+        state,
+        {"action": "escalate", "indices": [2], "team": "IT", "request": "periksa transaksi"},
+    )
     assert state.stage == Stage.DRAFT and state.selected_ids == ("q2",)
     assert state.request == "periksa transaksi"
 
@@ -697,7 +699,15 @@ def test_ui_offer_display_and_draft_revision(companion, monkeypatch):
     monkeypatch.setenv("BNIVOICE360_COMPANION_REMOTE_ENABLED", "0")
     app = AppTest.from_file(str(PROJECT_ROOT / "app.py"), default_timeout=30).run()
     app.sidebar.radio(key="current_page").set_value("BNIVoice360 Companion").run()
-    app.chat_input[0].set_value("Apakah ada issue urgent?").run()
+    assert app.chat_input[0].disabled
+    companion.execute_workflow(
+        app.session_state["companion_context"],
+        {"action": "exists", "urgent_only": True},
+        SESSION,
+        ROLE,
+        today=TODAY,
+    )
+    app.run()
     assert not app.exception
     assert app.session_state["companion_context"].stage == Stage.OFFER
     assert not any(button.key.startswith("companion_pick_") for button in app.button if button.key)

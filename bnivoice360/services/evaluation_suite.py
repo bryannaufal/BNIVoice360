@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from bnivoice360.domain import VoiceRecord
 from bnivoice360.services.companion_intent import validate_schema
 
-SUITE_VERSION = "companion-v1"
+SUITE_VERSION = "companion-v2-llm-tools"
 
 
 @dataclass(frozen=True)
@@ -260,6 +260,72 @@ def fixture_records(today: date) -> list[VoiceRecord]:
     ]
 
 
+# Synthetic scenario plans only. These exact fixtures are never a production input router.
+SCENARIO_PLANS = {
+    "Apakah ada issue terkait wondr yang perlu segera ditindaklanjuti?": {
+        "action": "exists",
+        "keyword": "wondr",
+        "urgent_only": True,
+    },
+    "Tampilkan issue wondr yang urgent": {
+        "action": "display",
+        "keyword": "wondr",
+        "urgent_only": True,
+    },
+    "Tampilkan issue wondr urgent": {"action": "display", "keyword": "wondr", "urgent_only": True},
+    "Apakah ada issue IT yang masih escalated?": {
+        "action": "exists",
+        "categories": ["IT"],
+        "status": "Escalated",
+    },
+    "Ya, tampilkan": {"action": "display", "refinement": True},
+    "Tampilkan issue terkait kartu kredit yang mendesak dari Twitter": {
+        "action": "display",
+        "keyword": "kartu kredit",
+        "urgent_only": True,
+        "sources": ["X"],
+    },
+    "Apakah ada issue wondr yang urgent?": {
+        "action": "exists",
+        "keyword": "wondr",
+        "urgent_only": True,
+    },
+    "Yang masih Open saja": {"action": "display", "refinement": True, "status": "Open"},
+    "Apakah ada issue wondr akhir-akhir ini?": {
+        "action": "exists",
+        "keyword": "wondr",
+        "ask_period": True,
+    },
+    "7 hari terakhir": {"action": "period", "period": "7d"},
+    'Tampilkan issue terkait "produk-tidak-ada"': {
+        "action": "display",
+        "keyword": "produk-tidak-ada",
+    },
+    "Saya ingin escalate keluhan tersebut": {"action": "escalate"},
+    "Escalate nomor 1 ke IT; permintaan: periksa proses login dan OTP": {
+        "action": "escalate",
+        "indices": [1],
+        "team": "IT",
+        "request": "periksa proses login dan OTP",
+    },
+    "Revisi draft agar lebih singkat dan formal": {
+        "action": "revise",
+        "request": "Revisi draft agar lebih singkat dan formal",
+    },
+    "Tampilkan issue wondr semua periode": {
+        "action": "display",
+        "keyword": "wondr",
+        "period": "all",
+    },
+    "Escalate nomor 1 ke IT; permintaan: periksa login": {
+        "action": "escalate",
+        "indices": [1],
+        "team": "IT",
+        "request": "periksa login",
+    },
+}
+
+
 class EvaluationMockClient:
     """Deterministic schema/provenance testing, not a measurement of a live model's quality."""
 
@@ -296,10 +362,14 @@ class EvaluationMockClient:
         else:
             reports = data["results"]
             source = reports[0]["id"]
+            facts = reports[0]["data"]
+            text = facts.get("outcome") or facts.get("question") or facts.get("limitation")
+            if text is None:
+                text = "Ditemukan {{" + source + ".total}} keluhan sesuai cakupan."
             result = {
                 "paragraphs": [
                     {
-                        "text": "Ditemukan {{" + source + ".total}} keluhan sesuai cakupan.",
+                        "text": text,
                         "sources": [source],
                     }
                 ]
@@ -308,25 +378,29 @@ class EvaluationMockClient:
         return result, {"tokens": 0, "duration_ms": 0}
 
     def choose_tools(self, messages, definitions, **kwargs):
-        if self.planned:
+        if messages[-1]["role"] == "tool":
             return {"tool_calls": []}, {"tokens": 0}
-        self.planned = True
+        question = json.loads(messages[1]["content"])["question"]
+        if question in SCENARIO_PLANS:
+            name, arguments = "complaint_workflow", SCENARIO_PLANS[question]
+        elif question == "Berapa keluhan negatif 7 hari terakhir?":
+            name, arguments = (
+                "volume_breakdown",
+                {
+                    "period": "7d",
+                    "sentiment": "Negative",
+                    "group_by": "topic",
+                    "limit": 5,
+                },
+            )
+        else:
+            name, arguments = "decline_request", {"reason": "outside_scope"}
         return {
             "tool_calls": [
                 {
                     "id": "eval_tool",
                     "type": "function",
-                    "function": {
-                        "name": "volume_breakdown",
-                        "arguments": json.dumps(
-                            {
-                                "period": "7d",
-                                "sentiment": "Negative",
-                                "group_by": "topic",
-                                "limit": 5,
-                            }
-                        ),
-                    },
+                    "function": {"name": name, "arguments": json.dumps(arguments)},
                 }
-            ]
+            ],
         }, {"tokens": 0}

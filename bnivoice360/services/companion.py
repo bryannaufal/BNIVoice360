@@ -1,4 +1,4 @@
-"""Database-aware local companion; no UI or generated SQL."""
+"""Legacy local report helper. Companion chat uses the LLM planner in companion_workflow."""
 
 import re
 from datetime import timedelta

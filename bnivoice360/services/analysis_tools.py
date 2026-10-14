@@ -1,6 +1,5 @@
 """Allowlisted read-only analysis over one database snapshot per conversation turn."""
 
-import re
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -12,7 +11,7 @@ from bnivoice360.services.agent.guardrails import TOXIC, GuardrailError, screen_
 from bnivoice360.services.agent.retrieval import similar_voices
 from bnivoice360.services.agent.workflow import _rows
 from bnivoice360.services.analytics import assigned_topics, topic_assignment_counts
-from bnivoice360.services.companion_intent import explicit_period, object_schema, validate_schema
+from bnivoice360.services.companion_intent import object_schema, validate_schema
 
 PERIODS = ["7d", "30d", "today", "this_week", "this_month", "all", "custom"]
 FILTER_PROPERTIES = {
@@ -145,7 +144,12 @@ class AnalysisEvidence:
 
 class AnalysisTools:
     def __init__(
-        self, batch, today: date, question: str, previous_scope: dict, selected_rows: dict
+        self,
+        batch,
+        today: date,
+        question: str,
+        previous_scope: dict,
+        selected_rows: dict,
     ):
         self.batch = batch
         self.today = today
@@ -166,17 +170,7 @@ class AnalysisTools:
 
     def dates(self, args):
         period = args["period"]
-        explicit, start, end = explicit_period(self.question)
-        if explicit and explicit != period:
-            raise GuardrailError("invented_analysis_period")
         if period == "custom":
-            expected = (
-                (start, end)
-                if explicit
-                else (self.previous_scope.get("start"), self.previous_scope.get("end"))
-            )
-            if (args["start"], args["end"]) != expected:
-                raise GuardrailError("invented_analysis_dates")
             try:
                 first, last = date.fromisoformat(args["start"]), date.fromisoformat(args["end"])
             except (TypeError, ValueError):
@@ -241,38 +235,8 @@ class AnalysisTools:
                 if not value.strip() or len(value) > 120:
                     raise GuardrailError("analysis_filter_size")
                 screen_input(value)
-                if (
-                    value.lower() not in self.question.lower()
-                    and value != self.previous_scope.get(field)
-                    and value not in self.known_terms
-                ):
-                    raise GuardrailError("invented_analysis_filter")
         if "period" in args:
             self.dates(args)
-            # An explicit single filter in the question must not be silently dropped or changed.
-            for field, options in (
-                ("category", CATEGORY_COLUMNS),
-                ("status", ESCALATION_STATUSES),
-                ("source", SOURCES),
-            ):
-                requested = [
-                    value
-                    for value in options
-                    if re.search(r"(?<!\w)" + re.escape(value) + r"(?!\w)", self.question, re.I)
-                ]
-                if field == "source":
-                    for alias, source in (
-                        ("Twitter", "X"),
-                        ("Play Store", "PlayStore"),
-                        ("App Store", "AppStore"),
-                    ):
-                        if (
-                            re.search(r"\b" + alias + r"\b", self.question, re.I)
-                            and source not in requested
-                        ):
-                            requested.append(source)
-                if len(requested) == 1 and args[field] != requested[0]:
-                    raise GuardrailError("omitted_or_changed_analysis_filter")
 
     def complete_arguments(self, name, args):
         if name not in DEFINITIONS:
@@ -281,37 +245,8 @@ class AnalysisTools:
         if "period" not in DEFINITIONS[name]["parameters"]["properties"]:
             return args
         values = {**default_scope(), **self.previous_scope}
-        period, start, end = explicit_period(self.question)
-        if period:
-            values.update(period=period, start=start, end=end)
-        elif name == "backlog_age" and not self.previous_scope:
-            values.update(period="all", start=None, end=None)
-        for field, options in (
-            ("category", CATEGORY_COLUMNS),
-            ("status", ESCALATION_STATUSES),
-            ("source", SOURCES),
-        ):
-            requested = [
-                value
-                for value in options
-                if re.search(r"(?<!\w)" + re.escape(value) + r"(?!\w)", self.question, re.I)
-            ]
-            if len(requested) == 1:
-                values[field] = requested[0]
-        for alias, source in (
-            ("Twitter", "X"),
-            ("Play Store", "PlayStore"),
-            ("App Store", "AppStore"),
-        ):
-            if re.search(r"\b" + alias + r"\b", self.question, re.I):
-                values["source"] = source
-        keywords = [
-            term
-            for term in ("QRIS", "transfer", "ATM", "login", "wondr")
-            if re.search(r"\b" + term + r"\b", self.question, re.I)
-        ]
-        if len(keywords) == 1:
-            values["keyword"] = keywords[0]
+        if "period" in args:
+            values.update(start=None, end=None)
         if "limit" in DEFINITIONS[name]["parameters"]["properties"]:
             values["limit"] = 5
         return {**values, **args}
@@ -392,12 +327,6 @@ class AnalysisTools:
 
     def execute(self, name, args, reference):
         args = self.complete_arguments(name, args)
-        if (
-            name == "backlog_age"
-            and explicit_period(self.question)[0] is None
-            and not self.previous_scope
-        ):
-            args = {**args, "period": "all", "start": None, "end": None}
         self.validate_arguments(name, args)
         if name == "dataset_coverage":
             frame = self.frame

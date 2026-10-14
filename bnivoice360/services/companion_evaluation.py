@@ -15,6 +15,7 @@ from bnivoice360.services.companion_state import CompanionState
 from bnivoice360.services.evaluation_store import EvaluationStore, decode_json, require_admin
 from bnivoice360.services.evaluation_suite import (
     CASES,
+    SCENARIO_PLANS,
     SUITE_VERSION,
     EvaluationMockClient,
     fixture_records,
@@ -80,7 +81,6 @@ class CompanionEvaluation:
                     "companion_workflow.py",
                     "companion_intent.py",
                     "companion_state.py",
-                    "companion_search.py",
                     "companion_draft.py",
                     "analysis_agent.py",
                     "analysis_tools.py",
@@ -174,9 +174,35 @@ class CompanionEvaluation:
             try:
                 for step in case.steps:
                     if isinstance(step, str):
-                        reply = conversation.handle(
-                            state, step, session_id, Role.MANAGER.value, api_key=key, today=today
-                        )
+                        if mode == "Local" and step in SCENARIO_PLANS:
+                            # Local evaluates typed tool execution, not natural-language understanding.
+                            reply = conversation.execute_workflow(
+                                state,
+                                SCENARIO_PLANS[step],
+                                session_id,
+                                Role.MANAGER.value,
+                                today=today,
+                            )
+                        elif mode == "Local" and case.case_id == "analysis":
+                            from bnivoice360.services.analysis_tools import AnalysisTools
+
+                            data = AnalysisTools(conversation.batch, today, step, {}, {}).execute(
+                                "volume_breakdown", {"period": "7d", "group_by": "topic"}, "T1"
+                            )
+                            state.analysis_sources = [
+                                {"id": "T1", "tool": "volume_breakdown", "data": data}
+                            ]
+                            state.reply_kind = "analysis"
+                            reply = f"Tools lokal menghitung {data['total']} keluhan."
+                        else:
+                            reply = conversation.handle(
+                                state,
+                                step,
+                                session_id,
+                                Role.MANAGER.value,
+                                api_key=key,
+                                today=today,
+                            )
                         transcript += [
                             {"role": "user", "content": step},
                             {"role": "assistant", "content": reply},

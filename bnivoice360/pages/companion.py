@@ -72,8 +72,8 @@ def render(services: AppServices) -> None:
     )
     if not api_key:
         st.info(
-            "Mode lokal aktif: pencarian dan eskalasi tetap tersedia. "
-            "Draft menggunakan ringkasan dasar; ringkasan dan saran AI memerlukan koneksi Groq."
+            "Chat Companion memerlukan koneksi Groq. Atur API key untuk mulai percakapan. "
+            "Tombol pencarian, pilihan tiket, dan form eskalasi tetap tersedia."
         )
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
@@ -93,10 +93,12 @@ def render(services: AppServices) -> None:
                         st.caption(label)
                         scopes.add(label)
             if message.get("tools"):
-                with st.expander("Tools yang digunakan"):
+                with st.expander("Tools yang digunakan", expanded=True):
                     for trace in message["tools"]:
                         st.text(f"{trace.get('source', '')} {trace['tool']} — {trace['status']}")
                         st.caption(f"Durasi: {trace.get('duration_ms', 0)} ms")
+                        if "arguments" in trace:
+                            st.json(trace["arguments"])
             if message.get("sources"):
                 with st.expander("Sumber dan hasil analisis"):
                     for source in message["sources"]:
@@ -105,7 +107,9 @@ def render(services: AppServices) -> None:
     try:
         conversation.set_role(state, role, session_id)
         if prompt := st.chat_input(
-            "Tanyakan keluhan atau tulis langkah berikutnya...", max_chars=1000
+            "Tanyakan keluhan atau tulis langkah berikutnya...",
+            max_chars=1000,
+            disabled=not api_key,
         ):
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             with st.spinner("Memeriksa permintaan dan konteks keluhan..."):
@@ -119,18 +123,18 @@ def render(services: AppServices) -> None:
             st.caption(
                 "Mulai dengan topik bebas atau pilih pencarian berikut. Periode default: 30 hari terakhir."
             )
-            for column, label, query in zip(
+            for column, label, arguments in zip(
                 st.columns(3),
                 ["Issue urgent", "IT · Escalated", "Keluhan Open"],
                 [
-                    "Tampilkan issue urgent",
-                    "Tampilkan issue IT yang masih Escalated",
-                    "Tampilkan keluhan Open",
+                    {"action": "display", "urgent_only": True},
+                    {"action": "display", "categories": ["IT"], "status": "Escalated"},
+                    {"action": "display", "status": "Open"},
                 ],
                 strict=True,
             ):
                 if column.button(label, key="companion_start_" + label, use_container_width=True):
-                    respond(conversation.handle(state, query, session_id, role, api_key=api_key))
+                    respond(conversation.execute_workflow(state, arguments, session_id, role))
                     st.rerun()
         if state.stage == Stage.OFFER:
             with st.container(border=True):
@@ -145,14 +149,16 @@ def render(services: AppServices) -> None:
                     use_container_width=True,
                 ):
                     respond(
-                        conversation.handle(
-                            state, "ya, tampilkan", session_id, role, api_key=api_key
+                        conversation.execute_workflow(
+                            state, {"action": "display", "refinement": True}, session_id, role
                         )
                     )
                     st.rerun()
                 if dismiss.button("Nanti dulu", key="companion_dismiss", use_container_width=True):
                     respond(
-                        conversation.handle(state, "tidak dulu", session_id, role, api_key=api_key)
+                        conversation.execute_workflow(
+                            state, {"action": "dismiss"}, session_id, role
+                        )
                     )
                     st.rerun()
         if state.analysis_evidence:
@@ -164,14 +170,18 @@ def render(services: AppServices) -> None:
                         st.rerun()
         if state.stage == Stage.PERIOD:
             buttons = st.columns(3)
-            for column, label, text in zip(
+            for column, label, period in zip(
                 buttons,
                 ["7 hari terakhir", "30 hari terakhir", "Semua periode"],
-                ["7 hari terakhir", "30 hari terakhir", "semua periode"],
+                ["7d", "30d", "all"],
                 strict=True,
             ):
-                if column.button(label, key="companion_period_" + text):
-                    respond(conversation.handle(state, text, session_id, role, api_key=api_key))
+                if column.button(label, key="companion_period_" + period):
+                    respond(
+                        conversation.execute_workflow(
+                            state, {"action": "period", "period": period}, session_id, role
+                        )
+                    )
                     st.rerun()
         if state.result_ids:
             st.markdown(f"**Hasil pencarian · {state.total:,} keluhan**")
@@ -241,20 +251,14 @@ def render(services: AppServices) -> None:
                 disabled=len(state.selected_ids) != 1,
             ):
                 respond(
-                    conversation.handle(
-                        state, "apakah ada keluhan serupa", session_id, role, api_key=api_key
-                    )
+                    conversation.execute_workflow(state, {"action": "similar"}, session_id, role)
                 )
                 st.rerun()
             if state.stage == Stage.CROSS_TOPIC:
                 if st.button("Cari lintas topik", key="companion_cross_topic"):
                     respond(
-                        conversation.handle(
-                            state,
-                            "cari keluhan serupa lintas topik",
-                            session_id,
-                            role,
-                            api_key=api_key,
+                        conversation.execute_workflow(
+                            state, {"action": "similar", "cross_topic": True}, session_id, role
                         )
                     )
                     st.rerun()
@@ -350,7 +354,9 @@ def render(services: AppServices) -> None:
                 )
         if state.query or state.selected_ids:
             if st.button("Batalkan konteks dan preview", key="companion_reset"):
-                respond(conversation.handle(state, "batal", session_id, role))
+                respond(
+                    conversation.execute_workflow(state, {"action": "cancel"}, session_id, role)
+                )
                 st.rerun()
     except ReviewRequired as exc:
         conversation.invalidate(state, session_id)

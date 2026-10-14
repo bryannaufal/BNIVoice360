@@ -207,7 +207,7 @@ period clarification, empty results, selection, full originals in drafts, revisi
 approval, guardrails, and tool-grounded counts. No operational tickets or existing conversation state
 are used or mutated. Opening or refreshing the page never starts evaluation.
 
-- **Local** runs deterministic search/workflow checks and basic drafts without a provider.
+- **Local** executes predefined typed tool scenarios and basic drafts without a provider; it does not measure language understanding.
 - **Mock** tests model-output contracts and grounding with deterministic simulated responses; it does
   not measure live model quality.
 - **Live Groq** uses the configured model/key on synthetic data only, and requires an explicit click.
@@ -243,7 +243,7 @@ masih Escalated**. **Mendesak / perlu segera ditindaklanjuti / urgent** filter t
 not a verified incident severity. **Yang masih Open saja** refines the active search; **semua kanal**,
 **semua kategori**, **semua urgensi**, **semua topik** clear the respective restriction. A new topic starts
 a new scope. The actual scope is displayed below the conversation.
-Chat text is not embedded. Existing count/top-topic questions remain available and calculated locally.
+Chat text is not embedded. Counts and rankings are calculated by local tools chosen by the LLM.
 Undated rows are only included in explicit all-time searches.
 
 Companion also answers broader analytical questions through Groq tool calling:
@@ -261,7 +261,7 @@ shows executed tools and their outcomes; **Sumber dan hasil analisis** exposes t
 citations such as `[T1]`. Date scope and filters are displayed beside the answer. New analysis defaults
 to the last seven days; backlog without dates uses all posting dates. A follow-up such as **Bagaimana
 di PlayStore?** can reuse the previous analytical scope. Explicit search commands use the search
-workflow and its 30-day default, asking about dates only when vague or unsupported.
+workflow and its 30-day default. The LLM interprets dates, including arbitrary durations as custom date ranges, and asks about essential ambiguity.
 
 Comparisons use immediately preceding periods with equal numbers of days. A zero baseline has no
 growth percentage. Outlier/Unlabeled stay in totals but are excluded from named-topic rankings.
@@ -279,7 +279,7 @@ questions do not select tickets, create drafts, invalidate existing approval, or
 
 Results show ID, date, source, status and excerpt: ten per page, up to 200 results. The total count
 includes matches beyond that limit. **Nothing is selected automatically.** Click **Pilih keluhan**,
-write **pilih nomor 2**, or explicitly refer to a visible ID. **Yang saldo terpotong** selects a ticket
+write **pilih nomor 2**, or refer to a unique visible complaint excerpt. **Yang saldo terpotong** selects a ticket
 only if that phrase uniquely identifies a visible result. Ambiguous references require selection.
 Selected IDs remain visible and survive navigation within the browser session. A new search or cancel
 clears selection and pending drafts.
@@ -316,28 +316,40 @@ Audit failure or concurrent edits abort the whole batch. Repeated submission doe
 
 Companion uses the existing Groq key automatically. Supported secret layouts: `GROQ_API_KEY = "..."`,
 `GROQ = "..."`, or `[groq]` with `api_key = "..."`. Environment `GROQ_API_KEY` takes precedence.
-Default model: `openai/gpt-oss-20b`. Keys are never saved in history or session state. For local-only
-operation set `$env:BNIVOICE360_COMPANION_REMOTE_ENABLED = "0"` before starting Streamlit; this is
-separate from the Issue Analytics batch panel's remote-AI setting. Without Groq, common commands,
-period buttons, selection, basic drafts and approval remain usable. For unrecognized local terms,
-use quotes, for example **cari keluhan "pembayaran digital" 7 hari terakhir**.
+Default model: `qwen/qwen3.8-27b`; override with `BNIVOICE360_AGENT_MODEL`. Keys are never saved in history or session state.
+Qwen requests use instruct mode (`reasoning_effort="none"`) and a separate strict JSON-schema response after tool execution.
+See [Groq's Qwen documentation](https://console.groq.com/docs/model/qwen/qwen3.8-27b) and
+[structured output support](https://console.groq.com/docs/structured-outputs).
 
-Intent extraction uses strict JSON schema and local validation for allowed actions, explicit dates,
-selection evidence and user-provided fields. There is no model write action or arbitrary SQL/shell/web
-tool. Analytical turns allow at most six sequential planning rounds/tool calls, a 60-second overall
-deadline and 20,000 reported tokens. Natural answers use a separate strict JSON response; an invalid
-format or unsupported number may be regenerated once within the same budget. Rejected prose is
-never displayed or copied into retry prompts. Workflow commands can use an intent call, quote
-extraction and a grounded natural reply; the application retains authority over actions. Requests
-have at most two HTTP attempts, 1,800 completion tokens (900 for tool selection), a 15-second socket
-timeout and a 40-second per-response deadline. Tool calling and strict final responses are separate,
-as required by [Groq's tool-use documentation](https://console.groq.com/docs/tool-use/overview).
-Only the current question, minimal workflow flags or previous analytical question/scope, and
-screened tool results are sent; full chat history is not sent. History is capped at 41 messages and
-is session-local. Common statistics also run through these tools in local mode.
+Every chat input goes directly to the LLM planner after security screening. There is no regex intent router,
+keyword allowlist, or regex date/filter extraction. The model chooses analysis tools or `complaint_workflow`
+and provides their typed arguments. Tool defaults come from documented defaults and previous scope only;
+the application does not reinterpret the user's words or override model filters. Workflow arguments are
+validated against an allowlist, date bounds, visible selections, row fingerprints, and verbatim operator notes.
+The model has no commit tool or arbitrary SQL/shell/web tool. Only explicit UI approval can change ticket status.
+
+Chat replies, including search results, clarifications and refusals, are written by the LLM from tool results,
+with validated citations and numbers. Internal tool outcomes and downloadable draft sections retain their
+structured format. A failed provider or rejected response produces an explicit error with inspectable tool
+results; it does not silently replace a normal chat answer with a success template.
+
+Set `$env:BNIVOICE360_COMPANION_REMOTE_ENABLED = "0"` for offline operation. Without Groq, free-text chat
+is disabled; typed search/period buttons, selection, draft forms, basic local drafts and approval remain usable.
+This setting is separate from the Issue Analytics batch panel's remote-AI setting.
+
+Chat allows at most six sequential planning calls, a 60-second deadline and 20,000 reported tokens. Final
+answers use a separate strict JSON response; invalid formatting or unsupported numbers may be retried once
+within that budget. Rejected prose is never displayed or copied into retry prompts. Requests have at most
+two HTTP attempts, 1,800 completion tokens (900 for tool selection), a 15-second socket timeout and a
+40-second per-response deadline. Tool calling and strict final responses are separate, as described in
+[Groq's tool-use documentation](https://console.groq.com/docs/tool-use/overview).
+The planner receives the current question, previous scope, up to five recent successful conversational turns,
+visible screened excerpts/result numbers, selected aliases, and screened tool results. UI history is capped
+at 41 messages and is session-local. Security/PII screening and output verification still use patterns; they
+serve validation, not language routing or intent extraction.
 
 The separate audit database logs `analysis_started`, tool start/finish, output rejection/retry,
-planner corrections and `analysis_finished`, with run/session IDs, digests, result counts, duration,
+`analysis_finished`, with run/session IDs, digests, result counts, duration,
 reported tokens, model, outcome and safe reason codes. Prompt text, complaint content, generated
 answers/drafts, authors and API keys are excluded. Provider/tool failures produce a safe fallback;
 successful screened tool results remain inspectable. Audit failure prevents a success response.

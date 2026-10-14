@@ -51,6 +51,11 @@ class GroqClient:
         self.api_key = api_key
         self.model = model
 
+    @property
+    def reasoning_effort(self):
+        # Qwen's instruct mode avoids spending the chat output budget on thinking.
+        return "none" if self.model.startswith("qwen/") else "low"
+
     def _request(self, payload: dict) -> dict:
         if not self.api_key:
             raise ModelUnavailable("missing_api_key")
@@ -111,7 +116,7 @@ class GroqClient:
                 tool_choice="auto",
                 parallel_tool_calls=False,
                 temperature=0,
-                reasoning_effort="low",
+                reasoning_effort=self.reasoning_effort,
                 max_completion_tokens=900,
             )
         )
@@ -143,7 +148,7 @@ class GroqClient:
                     {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
                 ],
                 temperature=0,
-                reasoning_effort="low",
+                reasoning_effort=self.reasoning_effort,
                 max_completion_tokens=1800,
                 response_format={
                     "type": "json_schema",
@@ -195,7 +200,7 @@ class GroqClient:
                 messages=messages,
                 temperature=0.2,
                 max_completion_tokens=1800,
-                reasoning_effort="low",
+                reasoning_effort=self.reasoning_effort,
             )
             if turn < 2:
                 payload.update(tools=TOOLS, tool_choice="auto", parallel_tool_calls=False)

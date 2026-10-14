@@ -243,7 +243,12 @@ def test_new_interaction_groups_nested_draft_and_records_model_usage(services, m
     )
     state = CompanionState()
     engine = services.conversation
-    engine.handle(state, "Tampilkan issue wondr semua periode", "session", MANAGER)
+    monkeypatch.setattr(
+        GroqClient,
+        "choose_tools",
+        lambda self, *args, **kwargs: EvaluationMockClient().choose_tools(*args, **kwargs),
+    )
+    engine.handle(state, "Tampilkan issue wondr semua periode", "session", MANAGER, api_key="test")
     engine.handle(
         state,
         "Escalate nomor 1 ke IT; permintaan: periksa login",

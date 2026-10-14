@@ -51,6 +51,7 @@ class CompanionState:
     result_ids: tuple[str, ...] = ()
     snapshots: dict[str, str] = field(default_factory=dict)
     total: int = 0
+    status_counts: dict[str, int] = field(default_factory=dict)
     page: int = 0
     selected_ids: tuple[str, ...] = ()
     result_kind: str = "keyword"
@@ -72,6 +73,7 @@ class CompanionState:
     analysis_waiting: bool = False
     analysis_evidence: dict = field(default_factory=dict)
     reply_kind: str = "workflow"
+    recent_turns: list[dict] = field(default_factory=list)
 
     @property
     def visible_ids(self) -> tuple[str, ...]:
