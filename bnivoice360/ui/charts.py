@@ -202,14 +202,13 @@ def top_issue_clusters(data: pd.DataFrame) -> go.Figure:
         x="Volume",
         y="topic_cluster",
         orientation="h",
-        color="Negative",
-        color_continuous_scale=["#FDE2D8", "#E55300", "#A8241A"],
         title="Top issue clusters",
         text="Volume",
     )
     style_figure(figure, max(380, 150 + len(data) * 46))
     max_volume = float(sorted_data["Volume"].max()) if not sorted_data.empty else 10.0
     figure.update_traces(
+        marker_color="#C0392B",
         textposition="outside",
         textfont=dict(color=TEXT_COLOR, size=12),
         texttemplate="%{text:,}",
@@ -223,9 +222,9 @@ def top_issue_clusters(data: pd.DataFrame) -> go.Figure:
     )
     figure.update_layout(
         uniformtext=dict(mode=False),
-        margin=dict(r=60),
+        margin=dict(r=30),
+        showlegend=False,
     )
-    figure.update_coloraxes(colorbar_tickformat=".0%", colorbar_title="Negative share")
     return figure
 
 
