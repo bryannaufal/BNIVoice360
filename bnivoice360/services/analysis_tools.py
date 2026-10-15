@@ -41,6 +41,15 @@ GROUPS = ["topic", "source", "category", "status", "sentiment"]
 
 
 def definition(name, description, properties):
+    if "limit" in properties:
+        properties = {
+            **properties,
+            "limit": {
+                **properties["limit"],
+                "minimum": 1,
+                "maximum": 5 if name in {"complaint_examples", "similar_complaints"} else 10,
+            },
+        }
     if "period" in properties:
         properties = {
             **properties,
@@ -95,7 +104,7 @@ TOOL_DEFINITIONS = [
     ),
     definition(
         "complaint_examples",
-        "Read latest matching excerpts (maximum five), with aliases and metadata. Use status Active for Open plus Escalated, excluding Resolved. Match the preceding backlog's period and filters for follow-up evidence. Samples do not establish causes or complete subtopic frequencies.",
+        "Read up to five excerpts for explicit sample requests or analytic evidence. To DISPLAY/LIST the issues themselves or full records, use complaint_workflow action display, refinement true instead. Use status Active for Open plus Escalated, excluding Resolved. Match the preceding backlog's period and filters. Samples do not establish causes or complete subtopic frequencies.",
         {**FILTER_PROPERTIES, "limit": {"type": "integer"}},
     ),
     definition(

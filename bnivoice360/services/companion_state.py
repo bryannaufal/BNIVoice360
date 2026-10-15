@@ -29,6 +29,8 @@ class ComplaintQuery:
     categories: tuple[str, ...] = ()
     urgent_only: bool = False
     sentiments: tuple[str, ...] = ("Negative",)
+    topic: str | None = None
+    as_of: date | None = None
 
     def filters(self, *, similarity: bool = False) -> IssueFilters:
         from bnivoice360.config import CATEGORY_COLUMNS, SOURCES
@@ -40,7 +42,9 @@ class ComplaintQuery:
             sentiments=("Negative",) if similarity else self.sentiments,
             escalation_status="Open" if similarity else self.status,
             categories=self.categories or tuple(CATEGORY_COLUMNS),
+            topics=(self.topic,) if self.topic else None,
             urgent_only=self.urgent_only,
+            as_of=self.as_of,
         )
 
 

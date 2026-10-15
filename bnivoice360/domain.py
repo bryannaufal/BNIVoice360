@@ -70,6 +70,7 @@ class IssueFilters:
     categories: tuple[str, ...] = tuple(CATEGORY_COLUMNS)
     escalation_status: str = "All"
     urgent_only: bool = False
+    as_of: date | None = None
 
 
 @dataclass(frozen=True)

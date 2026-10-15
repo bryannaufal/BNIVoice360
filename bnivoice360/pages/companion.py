@@ -303,8 +303,21 @@ def render(services: AppServices) -> None:
                 "saran AI perlu ditinjau. Revisi draft memerlukan persetujuan baru."
             )
             if state.draft_mode != "groq":
+                reason = state.draft_reason
+                if reason == "analysis_unverified_number":
+                    detail = "angka dalam ringkasan AI belum dapat diverifikasi terhadap bukti"
+                elif reason == "model_unavailable" or reason.startswith("provider_"):
+                    detail = "layanan AI tidak tersedia atau gagal menghasilkan respons yang dapat digunakan"
+                elif reason == "agent_deadline":
+                    detail = "pembuatan ringkasan AI melewati batas waktu"
+                elif reason == "masked_content_unavailable":
+                    detail = "masked_content keluhan belum tersedia untuk dikirim ke AI"
+                elif reason == "context_budget":
+                    detail = "isi keluhan terpilih melebihi batas konteks AI"
+                else:
+                    detail = "ringkasan AI belum memenuhi pemeriksaan bukti dan isi"
                 st.info(
-                    "Draft dasar: ringkasan AI tidak tersedia atau tidak lolos validasi. "
+                    f"Draft dasar: {detail}. "
                     "Keluhan asli tetap lengkap dan dapat ditinjau."
                 )
             st.code(state.draft_text, language=None, wrap_lines=True)

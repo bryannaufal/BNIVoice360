@@ -91,7 +91,7 @@ class Settings:
         )
     )
     agent_model: str = field(
-        default_factory=lambda: os.environ.get("BNIVOICE360_AGENT_MODEL", "openai/gpt-oss-20b")
+        default_factory=lambda: os.environ.get("BNIVOICE360_AGENT_MODEL", "qwen/qwen3.8-27b")
     )
     agent_similarity_threshold: float = field(
         default_factory=lambda: float(os.environ.get("BNIVOICE360_AGENT_SIMILARITY", "0.80"))
@@ -100,7 +100,7 @@ class Settings:
         default_factory=lambda: int(os.environ.get("BNIVOICE360_AGENT_LIMIT", "20"))
     )
     agent_remote_enabled: bool = field(
-        default_factory=lambda: os.environ.get("BNIVOICE360_AGENT_REMOTE_ENABLED", "0") == "1"
+        default_factory=lambda: os.environ.get("BNIVOICE360_AGENT_REMOTE_ENABLED", "1") == "1"
     )
     companion_remote_enabled: bool = field(
         default_factory=lambda: os.environ.get("BNIVOICE360_COMPANION_REMOTE_ENABLED", "1") == "1"

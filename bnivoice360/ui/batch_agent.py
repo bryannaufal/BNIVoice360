@@ -25,7 +25,27 @@ def _cancel(agent: BatchAgent, session_id: str):
 
 def _render_draft(proposal):
     if proposal.mode == "manual":
-        st.info("Template manual tersedia. Draft AI tidak digunakan: " + proposal.reason)
+        if proposal.reason == "manual_template":
+            st.info("Template manual dipilih. Aktifkan 'Buat draft dengan AI Groq' untuk membuat ringkasan AI.")
+        else:
+            reasons = {
+                "remote_disabled": "fitur draft AI dinonaktifkan dalam konfigurasi",
+                "missing_api_key": "API key Groq belum tersedia",
+                "masked_content_unavailable": "masked_content keluhan terpilih belum tersedia",
+                "context_budget": "keluhan terpilih melebihi batas konteks AI",
+                "unverified_number": "ringkasan AI memuat angka yang belum dapat diverifikasi",
+                "invalid_json": "respons AI belum berupa JSON yang valid setelah percobaan ulang",
+                "invalid_schema": "struktur respons AI belum sesuai format draft setelah percobaan ulang",
+                "agent_deadline": "pembuatan draft AI melewati batas waktu",
+            }
+            detail = reasons.get(proposal.reason)
+            if detail is None:
+                detail = (
+                    "layanan Groq belum memberikan respons yang dapat digunakan"
+                    if proposal.reason.startswith("provider_")
+                    else "ringkasan AI belum lolos pemeriksaan bukti dan isi"
+                )
+            st.info(f"Template manual digunakan karena {detail}. Anda tetap dapat meninjau keluhan.")
     else:
         st.caption(
             "Interpretasi AI perlu diperiksa. Kutipan harus mendukung setiap temuan; dugaan belum terbukti."
@@ -139,22 +159,29 @@ def render_batch_agent(agent: BatchAgent, filters: IssueFilters, topic_id: int |
                 max_chars=1000,
                 key="batch_instruction",
             )
+            api_key = _api_key() if agent.settings.agent_remote_enabled else ""
+            ai_available = agent.settings.agent_remote_enabled and bool(api_key)
             use_ai = st.checkbox(
                 "Buat draft dengan AI Groq",
-                value=False,
-                disabled=not agent.settings.agent_remote_enabled,
-                key="batch_use_ai",
+                value=ai_available,
+                disabled=not ai_available,
+                key="batch_use_ai_masked",
             )
+            use_ai = use_ai and ai_available
             st.caption(
-                "Masking PII belum aktif. AI Groq memproses cuplikan keluhan; nama/alamat masih dapat terkirim. "
-                "Author tidak disertakan. Pemeriksaan pola PII hanya memberi perlindungan terbatas."
+                "Draft AI menggunakan cuplikan masked_content dari data sumber. "
+                "Isi keluhan asli dan author tidak dikirim ke Groq. "
+                "Jika masked_content tidak tersedia, aplikasi menggunakan template manual."
             )
             if not agent.settings.agent_remote_enabled:
                 st.caption(
-                    "Draft AI belum diaktifkan; pencarian dan template manual tetap tersedia."
+                    "Draft AI dinonaktifkan oleh BNIVOICE360_AGENT_REMOTE_ENABLED=0. "
+                    "Ubah menjadi 1 untuk mengaktifkannya."
                 )
+            elif not api_key:
+                st.caption("Isi API key Groq di .streamlit/secrets.toml atau environment GROQ_API_KEY untuk menggunakan draft AI.")
             draft_signature = hashlib.sha256(
-                repr((token, selected, instruction, use_ai)).encode()
+                repr(("masked-draft-v1", token, selected, instruction, use_ai)).encode()
             ).hexdigest()
             if st.session_state.get("batch_draft_signature") != draft_signature:
                 _cancel(agent, session_id)
@@ -170,7 +197,7 @@ def render_batch_agent(agent: BatchAgent, filters: IssueFilters, topic_id: int |
                         role,
                         instruction=instruction,
                         use_ai=use_ai,
-                        api_key=_api_key() if use_ai else "",
+                        api_key=api_key if use_ai else "",
                     )
                 st.session_state["batch_proposal"] = proposal
                 st.session_state["batch_draft_signature"] = draft_signature

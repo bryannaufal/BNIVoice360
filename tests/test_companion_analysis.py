@@ -17,7 +17,7 @@ from bnivoice360.services.agent.guardrails import GuardrailError
 from bnivoice360.services.agent.workflow import ReviewRequired
 from bnivoice360.services.analysis_agent import render_answer
 from bnivoice360.services.analysis_tools import AnalysisTools, default_scope
-from bnivoice360.services.companion_state import CompanionState
+from bnivoice360.services.companion_state import CompanionState, ComplaintQuery, Stage
 
 TODAY = date(2026, 10, 11)
 SESSION = "analysis-session"
@@ -557,6 +557,214 @@ def test_rejected_model_answer_always_can_use_validated_backlog_facts(
             ).fetchone()[0]
             == 1
         )
+
+
+def test_display_refinement_inherits_latest_analysis_instead_of_stale_search(operational_engine):
+    operational_engine.repository.insert(
+        [
+            VoiceRecord(
+                "ops-undated",
+                "Laporan belum bertanggal.",
+                None,
+                "X",
+                "Negative",
+                is_Operasional=1,
+                is_Urgent=1,
+            ),
+            VoiceRecord(
+                "ops-future",
+                "Laporan bertanggal masa depan.",
+                "2027-01-01",
+                "X",
+                "Negative",
+                is_Operasional=1,
+                is_Urgent=1,
+            ),
+        ]
+    )
+    state = CompanionState(
+        query=ComplaintQuery("Login", sources=("PlayStore",)),
+        analysis_scope=args(
+            period="all", category="Operasional", status="Active", urgent_only=True
+        ),
+    )
+    reply = operational_engine.execute_workflow(
+        state, {"action": "display", "refinement": True}, SESSION, ROLE, today=TODAY
+    )
+    assert state.stage == Stage.RESULTS and set(state.result_ids) == {
+        "a1",
+        "ops-old",
+        "ops-undated",
+    }
+    assert state.total == 3 and not state.selected_ids
+    assert state.query.status == "Active" and state.query.categories == ("Operasional",)
+    assert state.query.start is None and state.query.end is None and state.query.as_of == TODAY
+    assert state.query.sources == () and state.query.urgent_only
+    assert "Daftar ditampilkan" in reply
+
+
+def test_display_refinement_preserves_exact_analytic_topic(operational_engine):
+    operational_engine.repository.insert(
+        [
+            VoiceRecord(
+                "different-topic",
+                "Keluhan QRIS disebut dalam laporan setoran.",
+                "2026-10-10",
+                "X",
+                "Negative",
+                is_Operasional=1,
+                is_Urgent=1,
+                topic_cluster="Setoran",
+            )
+        ]
+    )
+    state = CompanionState(
+        analysis_scope=args(
+            period="all",
+            category="Operasional",
+            topic="QRIS",
+            status="Active",
+            urgent_only=True,
+        )
+    )
+    operational_engine.execute_workflow(
+        state, {"action": "display", "refinement": True}, SESSION, ROLE, today=TODAY
+    )
+    assert state.result_ids == ("a1",) and state.query.topic == "QRIS"
+    assert "Topik: QRIS" in operational_engine.scope(state)
+
+
+def test_display_refinement_allows_explicit_filter_overrides(operational_engine):
+    state = CompanionState(
+        analysis_scope=args(
+            period="all",
+            category="Operasional",
+            status="Active",
+            urgent_only=True,
+        )
+    )
+    operational_engine.execute_workflow(
+        state,
+        {
+            "action": "display",
+            "refinement": True,
+            "status": "Open",
+            "period": "7d",
+            "urgent_only": False,
+        },
+        SESSION,
+        ROLE,
+        today=TODAY,
+    )
+    assert set(state.result_ids) == {"a1", "ops-not-urgent"}
+    assert state.query.start == date(2026, 10, 5) and state.query.end == TODAY
+    assert state.query.status == "Open" and not state.query.urgent_only
+
+
+def test_overlarge_example_request_is_repaired_into_feed_display(operational_engine):
+    state = CompanionState(
+        analysis_scope=args(
+            period="all",
+            category="Operasional",
+            status="Active",
+            urgent_only=True,
+        )
+    )
+    fake = FakeClient(
+        [
+            call(
+                "complaint_examples",
+                args(
+                    period="all",
+                    category="Operasional",
+                    status="Active",
+                    urgent_only=True,
+                    limit=107,
+                ),
+            ),
+            call("complaint_workflow", {"action": "display", "refinement": True}),
+        ],
+        {
+            "paragraphs": [
+                {
+                    "text": "Daftar {{T1.total_results}} keluhan tersedia di bawah.",
+                    "sources": ["T1"],
+                }
+            ]
+        },
+    )
+    answer = operational_engine.analysis.answer(
+        state,
+        "Tampilkan lengkap isu-isu tersebut",
+        SESSION,
+        TODAY,
+        fake,
+        conversation=operational_engine,
+        role=ROLE,
+    )
+    assert "Daftar 2 keluhan" in answer and set(state.result_ids) == {"a1", "ops-old"}
+    assert [trace["tool"] for trace in state.tool_trace] == ["complaint_workflow"]
+    assert (
+        len(state.analysis_sources) == 1
+        and state.analysis_sources[0]["tool"] == "complaint_workflow"
+    )
+    assert not state.selected_ids and state.proposal is None
+    with sqlite3.connect(operational_engine.batch.audit.path) as connection:
+        rejected = json.loads(
+            connection.execute(
+                "SELECT metadata FROM events WHERE event='analysis_tool_rejected'"
+            ).fetchone()[0]
+        )
+    assert rejected["reason"] == "analysis_result_budget" and rejected["retry"] == 1
+
+
+def test_ui_display_after_analysis_opens_full_selectable_feed(operational_engine, monkeypatch):
+    full_text = ("Setoran belum tercatat, mohon diperiksa. " * 25).strip()
+    with operational_engine.repository.database.transaction() as connection:
+        connection.execute(
+            "UPDATE suara_nasabah SET content=? WHERE suara_nasabah_id='ops-old'", (full_text,)
+        )
+    monkeypatch.setenv("BNIVOICE360_DB_PATH", str(operational_engine.batch.settings.database_path))
+    monkeypatch.setenv("BNIVOICE360_COMPANION_REMOTE_ENABLED", "1")
+    monkeypatch.setattr("bnivoice360.pages.companion.groq_key", lambda: "synthetic")
+    fake = FakeClient(
+        [call("complaint_workflow", {"action": "display", "refinement": True})],
+        {
+            "paragraphs": [
+                {
+                    "text": "Daftar {{T1.total_results}} keluhan ditampilkan di bawah.",
+                    "sources": ["T1"],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        GroqClient,
+        "choose_tools",
+        lambda self, *arguments, **kwargs: fake.choose_tools(*arguments, **kwargs),
+    )
+    monkeypatch.setattr(
+        GroqClient,
+        "structured",
+        lambda self, *arguments, **kwargs: fake.structured(*arguments, **kwargs),
+    )
+    app = AppTest.from_file(str(PROJECT_ROOT / "app.py"), default_timeout=30).run()
+    app.sidebar.radio(key="current_page").set_value("BNIVoice360 Companion").run()
+    app.session_state["companion_context"] = CompanionState(
+        analysis_scope=args(
+            period="all",
+            category="Operasional",
+            status="Active",
+            urgent_only=True,
+        )
+    )
+    app.chat_input[0].set_value("Tampilkan lengkap isu-isu tersebut").run()
+    assert not app.exception
+    state = app.session_state["companion_context"]
+    assert set(state.result_ids) == {"a1", "ops-old"} and not state.selected_ids
+    assert any("Hasil pencarian" in item.value for item in app.markdown)
+    assert any(item.value == full_text for item in app.text)
+    assert any(item.key and item.key.startswith("companion_pick_") for item in app.button)
 
 
 def test_daily_series_has_zero_days_and_no_false_incident(engine):

@@ -6,7 +6,8 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from bnivoice360.services.agent.guardrails import GuardrailError
+from bnivoice360.services.agent.guardrails import GuardrailError, validate_output
+from bnivoice360.services.companion_intent import object_schema
 
 
 class ModelUnavailable(RuntimeError):
@@ -44,6 +45,37 @@ TOOLS = [
         ("get_selection_stats", "Read computed counts and categories for the selected complaints."),
     )
 ]
+
+
+def _draft_schema(evidence):
+    reference = object_schema(
+        {
+            "ticket": {"type": "string", "enum": list(evidence)},
+            "quote": {"type": "string"},
+        }
+    )
+    item = {
+        "text": {"type": "string"},
+        "evidence": {"type": "array", "items": reference},
+    }
+    return object_schema(
+        {
+            kind: {
+                "type": "array",
+                "items": object_schema(
+                    {
+                        **item,
+                        **(
+                            {"team": {"type": "string", "enum": ["IT", "Operasional", "Bisnis"]}}
+                            if kind == "actions"
+                            else {}
+                        ),
+                    }
+                ),
+            }
+            for kind in ("findings", "hypotheses", "actions")
+        }
+    )
 
 
 class GroqClient:
@@ -181,7 +213,8 @@ class GroqClient:
 
     def draft(self, evidence: dict[str, str], stats: dict, instruction: str) -> tuple[str, dict]:
         started = time.monotonic()
-        self.deadline = started + 60
+        draft_deadline = started + 60
+        self.deadline = draft_deadline
         messages = [
             {"role": "system", "content": SYSTEM},
             {
@@ -205,7 +238,14 @@ class GroqClient:
             if turn < 2:
                 payload.update(tools=TOOLS, tool_choice="auto", parallel_tool_calls=False)
             else:
-                payload["response_format"] = {"type": "json_object"}
+                payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "batch_complaint_draft",
+                        "strict": True,
+                        "schema": _draft_schema(evidence),
+                    },
+                }
             response = self._request(payload)
             if time.monotonic() > self.deadline:
                 raise ModelUnavailable("agent_deadline")
@@ -217,8 +257,33 @@ class GroqClient:
                 tokens += int(response.get("usage", {}).get("total_tokens", 0))
                 tool_calls = message.get("tool_calls") or []
                 if not tool_calls:
-                    return message.get("content") or "", dict(
-                        rounds=turn + 1,
+                    raw = message.get("content") or ""
+                    repair_rounds = 0
+                    try:
+                        validate_output(raw, evidence)
+                    except GuardrailError as exc:
+                        if str(exc) not in {"invalid_json", "invalid_schema"}:
+                            raise
+                        # Rebuild from the same masked evidence, never rejected model prose.
+                        result, usage = self.structured(
+                            SYSTEM + "\nReturn only the required JSON object, without markdown fences. "
+                            "The previous response had an invalid format. Use all required fields; "
+                            "actions must contain at least one proposed verification step with exact evidence.",
+                            {
+                                "user_note": instruction,
+                                "selected_voices": evidence,
+                                "computed_stats": stats,
+                            },
+                            _draft_schema(evidence),
+                            "batch_complaint_draft",
+                            deadline=draft_deadline,
+                        )
+                        raw = json.dumps(result, ensure_ascii=False)
+                        tokens += usage.get("tokens", 0)
+                        repair_rounds = 1
+                        validate_output(raw, evidence)
+                    return raw, dict(
+                        rounds=turn + 1 + repair_rounds,
                         tools=calls,
                         tokens=tokens,
                         duration_ms=int((time.monotonic() - started) * 1000),

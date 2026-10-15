@@ -184,11 +184,15 @@ class CompanionEvaluation:
                                 Role.MANAGER.value,
                                 today=today,
                             )
-                        elif mode == "Local" and case.case_id in {"analysis", "urgent_operational"}:
+                        elif mode == "Local" and case.case_id in {
+                            "analysis",
+                            "urgent_operational",
+                            "display_after_analysis",
+                        }:
                             from bnivoice360.services.analysis_tools import AnalysisTools
 
                             analysis = AnalysisTools(conversation.batch, today, step, {}, {})
-                            if case.case_id == "urgent_operational":
+                            if case.case_id in {"urgent_operational", "display_after_analysis"}:
                                 scope = {
                                     "period": "all",
                                     "category": "Operasional",
@@ -209,6 +213,8 @@ class CompanionEvaluation:
                                 for index, (name, scope) in enumerate(plan, 1)
                             ]
                             state.reply_kind = "analysis"
+                            state.analysis_scope = analysis.scope.copy()
+                            state.analysis_question = step
                             reply = f"Tools lokal menghitung {state.analysis_sources[0]['data']['total']} keluhan."
                         else:
                             reply = conversation.handle(
@@ -321,6 +327,7 @@ class CompanionEvaluation:
                     None,
                 ),
                 "analysis_tools": [source["tool"] for source in state.analysis_sources],
+                "last_tool": state.tool_trace[-1]["tool"] if state.tool_trace else None,
                 "analysis_scopes_match": bool(state.analysis_sources)
                 and all(
                     source["data"].get("scope") == state.analysis_sources[0]["data"].get("scope")

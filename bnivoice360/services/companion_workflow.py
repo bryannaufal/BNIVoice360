@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from bnivoice360.config import SENTIMENTS
 from bnivoice360.domain import Role
 from bnivoice360.services.agent.audit import fingerprint
 from bnivoice360.services.agent.groq_client import GroqClient
@@ -67,7 +68,7 @@ WORKFLOW_DEFINITION = {
     "type": "function",
     "function": {
         "name": "complaint_workflow",
-        "description": "Search/count/display complaints, refine a previous search, explicitly select visible result numbers or an evidence alias, search similar tickets, prepare/revise an escalation draft, or cancel. NEVER commits status changes. Supply only fields needed for the requested action. ask_period=true requests clarification of an ambiguous period; refinement=true reuses the active search. Empty sources/categories explicitly clear their filter. match_phrase selects only a unique exact complaint excerpt.",
+        "description": "Display opens the paginated UI complaint feed with full local text and selectable tickets. Use action display, refinement true for 'tampilkan isu-isu tersebut' or 'tampilkan lengkap', including after analytics; no limit argument is needed. Refinement reuses the latest analytic scope or active search. Also search/count/refine complaints, explicitly select visible result numbers or an evidence alias, search similar tickets, prepare/revise a draft, or cancel. NEVER commits status changes. ask_period true clarifies ambiguous periods. Empty sources/categories clear filters. match_phrase must uniquely match a visible excerpt.",
         "parameters": WORKFLOW_SCHEMA,
     },
 }
@@ -112,7 +113,30 @@ class CompanionConversation:
             "category": query.categories[0] if len(query.categories) == 1 else None,
             "sentiment": query.sentiments[0] if len(query.sentiments) == 1 else "All",
             "urgent_only": query.urgent_only,
+            "topic": getattr(query, "topic", None),
         }
+
+    def query_from_analysis(self, scope, today):
+        start, end = self._period(
+            Intent(
+                "period", period=scope["period"], start=scope.get("start"), end=scope.get("end")
+            ),
+            today,
+        )
+        return ComplaintQuery(
+            keyword=scope.get("keyword") or "",
+            start=start,
+            end=end,
+            sources=(scope["source"],) if scope.get("source") else (),
+            status=scope.get("status", "All"),
+            categories=(scope["category"],) if scope.get("category") else (),
+            sentiments=SENTIMENTS
+            if scope.get("sentiment") == "All"
+            else (scope.get("sentiment", "Negative"),),
+            urgent_only=scope.get("urgent_only", False),
+            topic=scope.get("topic"),
+            as_of=today if scope["period"] == "all" else None,
+        )
 
     def model_context(self, state):
         visible = []
@@ -134,9 +158,12 @@ class CompanionConversation:
         return safe_data(
             {
                 "stage": state.stage.value,
+                "ui_feed_available": True,
+                "can_display_previous_analysis": bool(state.analysis_scope),
                 "search_scope": self.scope(state),
                 "search_action": state.search_action,
                 "total_results": state.total,
+                "returned": len(state.result_ids),
                 "status_counts": state.status_counts,
                 "selected_count": len(state.selected_ids),
                 "period_options_days": [7, 30],
@@ -153,6 +180,9 @@ class CompanionConversation:
                 if state.query and state.query.start
                 else None,
                 "end": state.query.end.isoformat() if state.query and state.query.end else None,
+                "as_of": state.query.as_of.isoformat()
+                if state.query and getattr(state.query, "as_of", None)
+                else None,
                 "status_change_requires_ui_approval": True,
             }
         )
@@ -211,8 +241,10 @@ class CompanionConversation:
             if query.start
             else "Semua periode (termasuk tanggal kosong)"
         )
+        if getattr(query, "as_of", None) and not query.start:
+            period = f"Semua periode hingga {query.as_of} (termasuk tanggal kosong)"
         return (
-            f"Topik: {query.keyword or 'Semua'} · {period} · Kanal: {', '.join(query.sources) or 'Semua'}"
+            f"Topik: {getattr(query, 'topic', None) or query.keyword or 'Semua'} · {period} · Kanal: {', '.join(query.sources) or 'Semua'}"
             f" · Sentimen: {', '.join(query.sentiments)} · Status: {query.status}"
             f" · Kategori: {', '.join(query.categories) or 'Semua'}"
             f" · Urgent saja: {'Ya (label database)' if query.urgent_only else 'Tidak'}"
@@ -705,6 +737,8 @@ class CompanionConversation:
             return self.revise_draft(state, session_id, role, intent.request or "", api_key)
         if intent.action in {"search", "period", "exists", "display"}:
             query = state.query if intent.refinement or intent.action == "period" else None
+            if intent.refinement and state.analysis_scope:
+                query = self.query_from_analysis(state.analysis_scope, today or self.today())
             keyword = (
                 intent.keyword if intent.keyword is not None else (query.keyword if query else "")
             )
@@ -732,6 +766,8 @@ class CompanionConversation:
                 urgent_only=intent.urgent_only
                 if intent.urgent_only is not None
                 else (query.urgent_only if query else False),
+                topic=getattr(query, "topic", None) if query and intent.keyword is None else None,
+                as_of=getattr(query, "as_of", None) if query and intent.period is None else None,
             )
             if ask_period:
                 state.stage = Stage.PERIOD

@@ -121,6 +121,8 @@ def topic_sentiments(frame: pd.DataFrame) -> pd.DataFrame:
 
 def filter_issues(frame: pd.DataFrame, filters: IssueFilters) -> pd.DataFrame:
     mask = frame["source"].isin(filters.sources) & frame["sentiment"].isin(filters.sentiments)
+    if filters.as_of:
+        mask &= frame["date_posted"].isna() | frame["date_posted"].dt.date.le(filters.as_of)
     if filters.start_date:
         mask &= frame["date_posted"].dt.date >= filters.start_date
     if filters.end_date:
@@ -135,7 +137,9 @@ def filter_issues(frame: pd.DataFrame, filters: IssueFilters) -> pd.DataFrame:
     # Selecting every category means no category restriction, including all-zero voices.
     if set(filters.categories) != set(CATEGORY_COLUMNS):
         mask &= category_mask
-    if filters.escalation_status in ESCALATION_STATUSES:
+    if filters.escalation_status == "Active":
+        mask &= frame["escalation_status"].isin(["Open", "Escalated"])
+    elif filters.escalation_status in ESCALATION_STATUSES:
         mask &= frame["escalation_status"].eq(filters.escalation_status)
     elif filters.escalation_status != "All":
         raise ValueError("Unknown escalation status filter.")

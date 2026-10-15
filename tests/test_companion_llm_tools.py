@@ -214,7 +214,7 @@ def test_offline_chat_does_not_parse_input_but_typed_tools_remain_available(conv
     assert state.stage == Stage.RESULTS and state.total == 2
 
 
-def test_failed_model_output_does_not_silently_show_success_template(conversation, monkeypatch):
+def test_failed_model_output_confirms_actual_completed_feed_display(conversation, monkeypatch):
     class Unavailable(ScriptedModel):
         def structured(self, *args, **kwargs):
             raise ModelUnavailable("provider_unavailable")
@@ -232,7 +232,7 @@ def test_failed_model_output_does_not_silently_show_success_template(conversatio
         monkeypatch,
     )
     assert state.result_ids and state.reply_kind == "fallback"
-    assert "belum dapat" in reply and "Ditemukan" not in reply
+    assert "Daftar 2 keluhan" in reply and "[T1]" in reply
     assert state.analysis_sources[0]["tool"] == "complaint_workflow"
 
 

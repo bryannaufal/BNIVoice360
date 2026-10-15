@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from bnivoice360.domain import VoiceRecord
 from bnivoice360.services.companion_intent import validate_schema
 
-SUITE_VERSION = "companion-v2-urgent-evidence"
+SUITE_VERSION = "companion-v2-analytics-display"
 
 
 @dataclass(frozen=True)
@@ -194,6 +194,27 @@ CASES = (
             "has_proposal": False,
         },
     ),
+    EvaluationCase(
+        "display_after_analysis",
+        "Tampilkan isu setelah analisis membuka feed dengan cakupan yang sama",
+        "Analisis",
+        (
+            "Apakah ada issue Operasional yang perlu segera ditindaklanjuti",
+            "tampilkan isu-isu tersebut",
+            "Tampilkan lengkap isu-isu tersebut",
+        ),
+        {
+            "stage": "results",
+            "result_ids": ["E002", "E006"],
+            "selected_ids": [],
+            "category": ["Operasional"],
+            "status": "Active",
+            "urgent_only": True,
+            "last_tool": "complaint_workflow",
+            "status_unchanged": True,
+            "has_proposal": False,
+        },
+    ),
 )
 
 
@@ -282,6 +303,8 @@ def fixture_records(today: date) -> list[VoiceRecord]:
 
 # Synthetic scenario plans only. These exact fixtures are never a production input router.
 SCENARIO_PLANS = {
+    "tampilkan isu-isu tersebut": {"action": "display", "refinement": True},
+    "Tampilkan lengkap isu-isu tersebut": {"action": "display", "refinement": True},
     "Apakah ada keluhan wondr yang urgent?": {
         "action": "exists",
         "keyword": "wondr",

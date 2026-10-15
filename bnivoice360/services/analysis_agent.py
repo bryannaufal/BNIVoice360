@@ -28,6 +28,10 @@ Do not write SQL/code, browse, request secrets, mutate tickets, or approve escal
 When complaint_workflow is available, use it for conversational complaint search, display, explicit selection,
 similarity, cancellation, escalation details, and draft revision. It can prepare a draft but NEVER commits a status change.
 Use action exists for simple complaint existence/search questions; display for requests to see a list. Search defaults to 30d, analytics to 7d.
+Requests to DISPLAY the issues themselves open the UI feed: use complaint_workflow action display.
+In particular "tampilkan isu-isu tersebut" and "Tampilkan lengkap isu-isu tersebut" mean display refinement true,
+even after an analytic answer or examples. The workflow inherits the latest analytic scope and shows full records locally.
+Do not use complaint_examples for these requests. "Lengkap/semua" means the paginated UI list, not a larger example limit.
 Questions about issues needing immediate follow-up or operational priorities need analytic evidence, even when phrased as "Apakah ada".
 Set ask_period for vague periods such as akhir-akhir ini; interpret explicit arbitrary durations as custom dates using today.
 For selection, use explicit result numbers from visible_results, evidence_alias from prior evidence, or a unique exact match_phrase.
@@ -67,7 +71,7 @@ For "Topik mana backlog Open terbanyak dan paling lama?", use backlog_age, statu
 When asked about increases, use compare_periods, not just volume_breakdown. For channel differences use source grouping.
 When asked to unpack a topic/read experiences, use complaint_examples; samples do not establish frequencies of subissues.
 For requests to show complaint examples, reuse the previous analytic scope unless explicitly changed, use complaint_examples,
-and set answer_ready true. Do not switch to ticket search/display unless the user wants selectable tickets.
+and set answer_ready true. This is only for explicit samples/examples or analytic reading, not a request to display the issues themselves.
 When asked for briefing/priorities, combine comparison, backlog, and examples as needed. Describe observed evidence,
 not an invented impact score. New/unlabeled patterns can be explored via examples but do not claim new incidents or clustering.
 Scoped tools accept filter overrides; defaults come only from previous_scope and default_scope.
@@ -470,6 +474,39 @@ def examples_evidence_summary(reports):
     return render_answer({"paragraphs": paragraphs}, reports)
 
 
+def displayed_feed_summary(reports):
+    """Confirm a completed local feed display if generated prose is unavailable."""
+    report = next(
+        (
+            report
+            for report in reversed(reports)
+            if report["tool"] == "complaint_workflow"
+            and report["data"].get("action") in {"display", "search", "period"}
+            and report["data"].get("workflow_completed") is True
+            and report["data"].get("stage") == "results"
+            and report["data"].get("search_action") == "display"
+        ),
+        None,
+    )
+    if report is None:
+        return None
+    reference, data = report["id"], report["data"]
+    if data["total_results"] and not data.get("returned"):
+        return None
+    if data["total_results"]:
+        text = (
+            "Daftar {{"
+            + reference
+            + ".total_results}} keluhan yang sesuai sudah ditampilkan di bawah. "
+        )
+        text += "Anda dapat membaca isi lengkap dan memilih tiket melalui feed."
+        if data["total_results"] > data["display_limit"]:
+            text += " Daftar dibatasi hingga {{" + reference + ".display_limit}} hasil terbaru."
+    else:
+        text = "Tidak ditemukan keluhan yang sesuai dengan cakupan pencarian ini."
+    return render_answer({"paragraphs": [{"text": text, "sources": [reference]}]}, reports)
+
+
 class AnalysisAgent:
     MAX_CALLS = 6
     MAX_TOKENS = 20000
@@ -491,6 +528,7 @@ class AnalysisAgent:
         next_planner_tokens = 0
         planning_limitation = None
         answer_rejected = False
+        call_repairs = 0
         reports = []
         status, reason = "error", ""
         if not state.analysis_scope and state.query:
@@ -635,6 +673,37 @@ class AnalysisAgent:
                         args = tools.complete_arguments(name, args)
                         tools.validate_arguments(name, args)
                     except GuardrailError as exc:
+                        if str(exc) == "analysis_result_budget" and call_repairs == 0:
+                            call_repairs += 1
+                            self.batch.audit.log(
+                                session_id,
+                                "analysis_tool_rejected",
+                                run_id=run_id,
+                                tool=name,
+                                reason=str(exc),
+                                retry=1,
+                            )
+                            call["function"]["name"] = name
+                            messages.extend(
+                                [
+                                    {"role": "assistant", "content": None, "tool_calls": calls},
+                                    {
+                                        "role": "tool",
+                                        "tool_call_id": call["id"],
+                                        "content": json.dumps(
+                                            {
+                                                "error": "analysis_result_budget",
+                                                "max_limit": 5
+                                                if name
+                                                in {"complaint_examples", "similar_complaints"}
+                                                else 10,
+                                                "guidance": "No tool executed. For a full display/list of issues use complaint_workflow action display, refinement true to reuse the previous scope. Its UI is paginated and has no example limit argument. Only use complaint_examples with limit at most five for explicit sample requests.",
+                                            }
+                                        ),
+                                    },
+                                ]
+                            )
+                            continue
                         if not reports or str(exc) not in {
                             "unexpected_analysis_dates",
                             "invalid_analysis_dates",
@@ -699,6 +768,7 @@ class AnalysisAgent:
                     # Evidence from this or a prior turn may only be selected explicitly.
                     state.analysis_evidence = {**previous_evidence, **tools.evidence}
                     before_traces = len(state.tool_trace)
+                    workflow_completed = True
                     try:
                         outcome = conversation.execute_workflow(
                             state,
@@ -710,10 +780,13 @@ class AnalysisAgent:
                         )
                     except ReviewRequired as exc:
                         outcome = str(exc)
+                        workflow_completed = False
                     # The planner trace already records the executed workflow tool.
                     del state.tool_trace[before_traces:]
                     data = conversation.model_context(state)
                     data["outcome"] = outcome
+                    data["action"] = args["action"]
+                    data["workflow_completed"] = workflow_completed
                     data = safe_data(data)
                     if args["action"] in {"cancel", "search", "exists", "display", "period"}:
                         previous_evidence = {}
@@ -933,8 +1006,10 @@ class AnalysisAgent:
                 }
             ):
                 try:
-                    summary = backlog_evidence_summary(reports) or examples_evidence_summary(
-                        reports
+                    summary = (
+                        displayed_feed_summary(reports)
+                        or backlog_evidence_summary(reports)
+                        or examples_evidence_summary(reports)
                     )
                 except GuardrailError:
                     summary = None

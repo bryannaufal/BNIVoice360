@@ -45,7 +45,7 @@ INTENT_SCHEMA = object_schema(
         "sources": {"type": "array", "items": {"type": "string", "enum": list(SOURCES)}},
         "status": {
             "type": ["string", "null"],
-            "enum": ["All", "Open", "Escalated", "Resolved", None],
+            "enum": ["All", "Active", "Open", "Escalated", "Resolved", None],
         },
         "indices": {"type": "array", "items": {"type": "integer"}},
         "team": {"type": ["string", "null"], "enum": ["IT", "Operasional", "Bisnis", None]},

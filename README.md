@@ -307,6 +307,9 @@ cancels the old preview and requires fresh approval. Drafting does not send mess
 Rejected/failed AI output uses a basic local summary while preserving every full original complaint.
 Remote evidence uses the source-provided `masked_content`; full original complaints are assembled only
 in the local document. Missing/blank masks block remote draft generation instead of substituting originals.
+The Issue Analytics similarity panel enables AI drafts by default when a Groq key is available;
+uncheck **Buat draft dengan AI Groq** for a manual template. Set `BNIVOICE360_AGENT_REMOTE_ENABLED=0`
+to disable batch AI drafts explicitly. Batch drafts also send only `masked_content` excerpts to Groq.
 
 To change status, check approval and click **Konfirmasi eskalasi N tiket**. Only Open tickets can be
 committed; Escalated/Resolved tickets can produce a document without a status action. Approval binds
@@ -317,9 +320,9 @@ Audit failure or concurrent edits abort the whole batch. Repeated submission doe
 
 Companion uses the existing Groq key automatically. Supported secret layouts: `GROQ_API_KEY = "..."`,
 `GROQ = "..."`, or `[groq]` with `api_key = "..."`. Environment `GROQ_API_KEY` takes precedence.
-Default model: `openai/gpt-oss-20b`; override with `BNIVOICE360_AGENT_MODEL`. Keys are never saved in history or session state.
-GPT-OSS requests use `reasoning_effort="low"` and a separate strict JSON-schema response after tool execution.
-Optional Qwen overrides continue to use instruct mode (`reasoning_effort="none"`).
+Default model: `qwen/qwen3.8-27b`; override with `BNIVOICE360_AGENT_MODEL`. Keys are never saved in history or session state.
+Qwen requests use instruct mode (`reasoning_effort="none"`) and a separate JSON-schema response after tool execution.
+Optional GPT-OSS overrides use `reasoning_effort="low"`.
 See Groq's [structured output support](https://console.groq.com/docs/structured-outputs).
 
 Every chat input goes directly to the LLM planner after security screening. There is no regex intent router,
@@ -352,6 +355,14 @@ If the model prematurely marks a nonempty urgent backlog ready, the application 
 `complaint_examples` from the same effective filters before writing the answer. Backlog `All` becomes
 `Active` for examples to preserve the same Open/Escalated population; empty backlogs need no examples.
 These are model instructions and typed tool capabilities, not a keyword router that rewrites arguments.
+Requests such as **tampilkan isu-isu tersebut** or **Tampilkan lengkap isu-isu tersebut** use
+`complaint_workflow` action `display`, `refinement: true`, opening the local paginated complaint feed.
+Refinement inherits the latest analytic scope, including Active status, urgency, category, exact topic
+and dates; explicit filter overrides take precedence. Full original text stays available in the feed's
+**Baca keluhan lengkap** expander, while only masked excerpts enter model context. Explicit requests for
+samples still use `complaint_examples` (up to five). An out-of-range analytic limit receives one bounded
+model correction instead of immediately aborting. If final prose fails after the feed has opened, a
+validated confirmation states the actual result count and the UI limit without claiming any ticket selection.
 Named periods require null/omitted `start` and `end`; only `period: custom` accepts explicit dates.
 If a later analysis call has invalid date arguments after evidence was collected, that call is rejected
 without changing its filters and the answer uses the successful results with their actual scope and limits.
