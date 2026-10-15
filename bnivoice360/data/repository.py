@@ -12,10 +12,10 @@ from bnivoice360.domain import Prediction, VoiceRecord
 INSERT_VOICE = """
 INSERT INTO suara_nasabah
 (suara_nasabah_id, content, date_posted, source, sentiment, is_IT,
- is_Bisnis, is_Operasional, is_Urgent, escalation_status, topic_id, author_id_or_name)
+ is_Bisnis, is_Operasional, is_Urgent, escalation_status, topic_id, author_id_or_name, masked_content)
 VALUES (:suara_nasabah_id, :content, :date_posted, :source, :sentiment,
         :is_IT, :is_Bisnis, :is_Operasional, :is_Urgent,
-        :escalation_status, :topic_id, :author_id_or_name)
+        :escalation_status, :topic_id, :author_id_or_name, :masked_content)
 ON CONFLICT(suara_nasabah_id) DO NOTHING
 """
 

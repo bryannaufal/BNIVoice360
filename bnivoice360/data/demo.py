@@ -106,6 +106,7 @@ def seed_records() -> list[VoiceRecord]:
                 urgent,
                 status,
                 topic,
+                masked_content=content,
             )
         )
     return rows

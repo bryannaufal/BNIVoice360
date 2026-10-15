@@ -163,6 +163,7 @@ def prepare_seed(
                 VoiceRecord(
                     suara_nasabah_id=row["data_id"],
                     content=content,
+                    masked_content=nullable_text(row.get("masked_content")),
                     date_posted=None if pd.isna(posted) else posted.isoformat(),
                     source=source,
                     sentiment=sentiment,
@@ -223,16 +224,61 @@ def initialize_data(database: Database, data: SeedData, overwrite: bool = False)
     }
 
 
+def refresh_masked_content(database: Database, voices: pd.DataFrame) -> dict:
+    """Refresh only masks for matching IDs and original text, preserving reviewed ticket state."""
+    require_columns(voices, ("data_id", "raw_content", "masked_content"), "voices")
+    records = []
+    identifiers = set()
+    for position, (_, row) in enumerate(voices.iterrows(), start=2):
+        identifier = nullable_text(row["data_id"])
+        original = nullable_text(row["raw_content"])
+        if identifier is None or identifier in identifiers or original is None:
+            raise ValueError(f"voices CSV row {position}: blank/duplicate ID or blank raw_content")
+        identifiers.add(identifier)
+        records.append((identifier, original, nullable_text(row["masked_content"])))
+    counts = dict(updated=0, unchanged=0, missing_mask=0, unmatched=0, content_mismatch=0)
+    with database.transaction() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        for identifier, original, masked in records:
+            existing = connection.execute(
+                "SELECT content,masked_content FROM suara_nasabah WHERE suara_nasabah_id=?",
+                (identifier,),
+            ).fetchone()
+            if existing is None:
+                counts["unmatched"] += 1
+                continue
+            if existing["content"] != original:
+                counts["content_mismatch"] += 1
+                continue
+            counts["missing_mask"] += int(masked is None)
+            if existing["masked_content"] == masked:
+                counts["unchanged"] += 1
+                continue
+            connection.execute(
+                "UPDATE suara_nasabah SET masked_content=? WHERE suara_nasabah_id=?",
+                (masked, identifier),
+            )
+            counts["updated"] += 1
+    return {"status": "masks_refreshed", "source_rows": len(records), **counts}
+
+
 def main() -> None:
     settings = Settings()
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--overwrite", dest="overwrite", action="store_true")
     mode.add_argument("--preserve", dest="overwrite", action="store_false")
+    mode.add_argument("--refresh-masked-content", action="store_true")
     parser.set_defaults(overwrite=settings.overwrite_initialization)
     parser.add_argument("--as-of", help="Override initialization time (Jakarta), e.g. 2026-10-11")
     args = parser.parse_args()
     database = Database(settings.database_path)
+    if args.refresh_masked_content:
+        voices = read_csv(settings.voice_csv)
+        require_columns(voices, ("data_id", "raw_content", "masked_content"), "voices")
+        database.initialize()
+        print(json.dumps(refresh_masked_content(database, voices), indent=2))
+        return
     # Preserve mode needs neither network access nor source validation for an existing DB.
     if database.path.exists() and not args.overwrite:
         database.initialize()

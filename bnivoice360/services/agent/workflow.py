@@ -16,6 +16,7 @@ from bnivoice360.services.agent.groq_client import GroqClient, ModelUnavailable
 from bnivoice360.services.agent.guardrails import GuardrailError, screen_input, validate_output
 from bnivoice360.services.agent.retrieval import similar_voices
 from bnivoice360.services.analytics import category_labels, filter_issues
+from bnivoice360.services.remote_content import masked_text
 
 
 class ReviewRequired(ValueError):
@@ -191,9 +192,7 @@ class BatchAgent:
                     raise ModelUnavailable("remote_disabled")
                 evidence = {}
                 for alias, record_id in aliases.items():
-                    # Screen the entire text before clipping: injection beyond excerpt must not bypass checks.
-                    screen_input(rows[record_id]["content"])
-                    evidence[alias] = rows[record_id]["content"][:2000]
+                    evidence[alias] = masked_text(rows[record_id])[:2000]
                 if sum(len(text) for text in evidence.values()) > 30000:
                     raise GuardrailError("context_budget")
                 selected = search.candidates.loc[search.candidates["suara_nasabah_id"].isin(ids)]

@@ -25,7 +25,7 @@ ROLE = Role.MANAGER.value
 
 
 @pytest.fixture
-def engine(tmp_path):
+def engine(tmp_path, synthetic_masks):
     services = create_services(
         Settings(
             tmp_path / "voices.db",
@@ -93,6 +93,7 @@ def engine(tmp_path):
             ),
         ]
     )
+    synthetic_masks(services.repository)
     return services.conversation
 
 
@@ -175,6 +176,389 @@ def test_backlog_age_since_posting_unknown_dates_and_future_exclusion(engine):
     assert qris["count"] == 3 and qris["oldest_days"] == 40
 
 
+@pytest.fixture
+def operational_engine(engine, synthetic_masks):
+    engine.repository.insert(
+        [
+            VoiceRecord(
+                "ops-old",
+                "Setoran belum tercatat.",
+                "2026-09-01",
+                "X",
+                "Negative",
+                is_Operasional=1,
+                is_Urgent=1,
+                escalation_status="Escalated",
+                topic_cluster="Setoran",
+            ),
+            VoiceRecord(
+                "ops-resolved",
+                "Setoran sudah diperbaiki.",
+                "2026-10-10",
+                "X",
+                "Negative",
+                is_Operasional=1,
+                is_Urgent=1,
+                escalation_status="Resolved",
+                topic_cluster="Setoran",
+            ),
+            VoiceRecord(
+                "ops-not-urgent",
+                "Antrean panjang.",
+                "2026-10-10",
+                "X",
+                "Negative",
+                is_Operasional=1,
+                is_Urgent=0,
+                topic_cluster="Antrean",
+            ),
+            VoiceRecord(
+                "ops-positive",
+                "Layanan lancar.",
+                "2026-10-10",
+                "X",
+                "Positive",
+                is_Operasional=1,
+                is_Urgent=1,
+                topic_cluster="Layanan",
+            ),
+        ]
+    )
+    synthetic_masks(engine.repository)
+    return engine
+
+
+@pytest.mark.parametrize("name", ["backlog_age", "volume_breakdown", "complaint_examples"])
+def test_active_urgent_scope_includes_old_escalated_and_excludes_resolved(operational_engine, name):
+    scope = args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5)
+    if name == "volume_breakdown":
+        scope["group_by"] = "topic"
+    result = tools(operational_engine).execute(name, scope, "T1")
+    assert result["total"] == 2
+    assert result["status_counts"] == {"Open": 1, "Escalated": 1, "Resolved": 0}
+    if name == "complaint_examples":
+        assert {example["status"] for example in result["examples"]} == {"Open", "Escalated"}
+        assert any(example["posted"] == "2026-09-01" for example in result["examples"])
+        assert all(example["urgent"] for example in result["examples"])
+    recent = tools(operational_engine).execute(name, {**scope, "period": "7d"}, "T2")
+    assert recent["total"] == 1  # Explicit user periods still take precedence.
+
+
+def test_urgent_operational_answer_uses_two_tools_then_writes_without_extra_planner(
+    operational_engine,
+):
+    scope = args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5)
+    fake = FakeClient(
+        [
+            call("backlog_age", scope),
+            call("complaint_examples", {**scope, "answer_ready": True}),
+            call("volume_breakdown", {**scope, "group_by": "topic"}),
+        ],
+        {
+            "paragraphs": [
+                {
+                    "text": "Ada {{T1.total}} keluhan negatif Operasional yang ditandai urgent dan masih aktif, mencakup {{T1.open}} Open dan {{T1.escalated}} Escalated, dari seluruh data hingga {{T1.scope.end_date}}.",
+                    "sources": ["T1"],
+                },
+                {
+                    "text": "Nasabah melaporkan QRIS gagal dan setoran belum tercatat. Sebagai langkah awal, transaksi terkait dapat diverifikasi dan perkembangan penanganan keluhan Escalated dapat diperiksa.",
+                    "sources": ["T2"],
+                },
+            ]
+        },
+    )
+    state = CompanionState()
+    before = operational_engine.repository.load().copy()
+    answer = operational_engine.analysis.answer(
+        state,
+        "Apakah ada issue Operasional yang perlu segera ditindaklanjuti",
+        SESSION,
+        TODAY,
+        fake,
+    )
+    assert state.reply_kind == "analysis" and "Ada 2 keluhan" in answer
+    assert "[T1]" in answer and "[T2]" in answer
+    assert [trace["tool"] for trace in state.tool_trace] == ["backlog_age", "complaint_examples"]
+    assert len(fake.calls) == 1  # The answer-ready call never requests another planning round.
+    assert all(
+        report["data"]["scope"]["status"] == "Active" for report in fake.final_data["results"]
+    )
+    assert "facts" not in fake.final_data  # No duplicate full evidence payload.
+    assert len(state.analysis_evidence) == 2 and not state.selected_ids and state.proposal is None
+    assert before.equals(operational_engine.repository.load())
+
+
+def test_planning_reserves_answer_budget_and_keeps_valid_answer_after_usage_overrun(
+    operational_engine,
+):
+    scope = args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5)
+
+    class ExpensiveClient(FakeClient):
+        planner_calls = 0
+
+        def choose_tools(self, *arguments, **kwargs):
+            self.planner_calls += 1
+            assert self.planner_calls <= 2, "Evidence is sufficient; reserve the remaining budget"
+            message, _ = super().choose_tools(*arguments, **kwargs)
+            return message, {"tokens": 4000 if self.planner_calls == 1 else 7000}
+
+        def structured(self, *arguments, **kwargs):
+            result, _ = super().structured(*arguments, **kwargs)
+            return result, {"tokens": 10000}
+
+    fake = ExpensiveClient([call("backlog_age", scope), call("complaint_examples", scope)])
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(
+        state,
+        "Apakah ada issue Operasional yang perlu segera ditindaklanjuti",
+        SESSION,
+        TODAY,
+        fake,
+    )
+    assert "2 laporan" in answer and state.reply_kind == "analysis"
+    assert fake.planner_calls == 2 and len(state.analysis_sources) == 2
+    with sqlite3.connect(operational_engine.batch.audit.path) as connection:
+        events = dict(
+            connection.execute(
+                "SELECT event,metadata FROM events WHERE event IN ('analysis_planning_stopped','analysis_budget_overrun','analysis_finished')"
+            ).fetchall()
+        )
+    assert json.loads(events["analysis_planning_stopped"])["reason"] == "answer_budget_reserved"
+    assert json.loads(events["analysis_budget_overrun"])["tokens"] == 21000
+    assert json.loads(events["analysis_finished"])["status"] == "ok"
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_provider_failure_after_urgent_evidence_returns_verified_summary(operational_engine, empty):
+    class FailedAnswer(FakeClient):
+        def structured(self, *arguments, **kwargs):
+            raise ModelUnavailable("provider_unavailable")
+
+    scope = args(
+        period="all",
+        category="Bisnis" if empty else "Operasional",
+        status="Active",
+        urgent_only=True,
+        limit=5,
+    )
+    fake = FailedAnswer([call("backlog_age", {**scope, "answer_ready": True})])
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(state, "Ada keluhan urgent?", SESSION, TODAY, fake)
+    assert "[T1]" in answer and "belum dapat" not in answer
+    assert "{{" not in answer and "}}" not in answer
+    if empty:
+        assert "Tidak ditemukan keluhan" in answer
+        assert "tidak memastikan" in answer
+    else:
+        assert "Ada 2 keluhan" in answer and "QRIS (1 keluhan)" in answer
+        assert "Setoran (1 keluhan)" in answer and "40 hari" in answer
+    assert state.analysis_scope["status"] == "Active" and state.recent_turns
+    assert not state.selected_ids and state.proposal is None
+
+
+def test_planner_failure_after_backlog_still_attempts_grounded_final_answer(operational_engine):
+    scope = args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5)
+
+    class FailedPlanner(FakeClient):
+        def choose_tools(self, *arguments, **kwargs):
+            if not self.calls:
+                raise ModelUnavailable("provider_unavailable")
+            return super().choose_tools(*arguments, **kwargs)
+
+    fake = FailedPlanner([call("backlog_age", scope)])
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(state, "Ada keluhan urgent?", SESSION, TODAY, fake)
+    assert "2 laporan" in answer and state.reply_kind == "analysis"
+    assert len(fake.final_data["results"]) == 1
+
+
+def test_invalid_generated_numbers_use_urgent_evidence_without_displaying_rejected_prose(
+    operational_engine,
+):
+    scope = args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5)
+    fake = FakeClient(
+        [call("backlog_age", {**scope, "answer_ready": True})],
+        {"paragraphs": [{"text": "Ada 999 keluhan.", "sources": ["T1"]}]},
+    )
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(state, "Ada keluhan urgent?", SESSION, TODAY, fake)
+    assert "Ada 2 keluhan" in answer and "999" not in answer
+    assert state.reply_kind == "blocked"  # Auditing retains the rejected model outcome.
+
+
+def test_urgent_evidence_does_not_override_unauthorized_tool_rejection(operational_engine):
+    scope = args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5)
+    fake = FakeClient([call("backlog_age", scope), call("execute_sql", {})])
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(state, "Ada keluhan urgent?", SESSION, TODAY, fake)
+    assert "belum dapat" in answer and state.reply_kind == "blocked"
+    assert not hasattr(fake, "final_data")
+
+
+@pytest.mark.parametrize(
+    "dates,reason",
+    [
+        ({"period": "all", "end": "2026-10-11"}, "unexpected_analysis_dates"),
+        (
+            {"period": "7d", "start": "2026-10-05", "end": "2026-10-11"},
+            "unexpected_analysis_dates",
+        ),
+        (
+            {"period": "custom", "start": "2026-10-12", "end": "2026-10-11"},
+            "invalid_analysis_dates",
+        ),
+        ({"period": "custom", "start": None, "end": None}, "invalid_analysis_dates"),
+    ],
+)
+def test_invalid_followup_dates_still_answer_from_valid_backlog(operational_engine, dates, reason):
+    scope = args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5)
+    fake = FakeClient(
+        [call("backlog_age", scope), call("complaint_examples", {**scope, **dates})],
+        {
+            "paragraphs": [
+                {
+                    "text": "Ada {{T1.total}} keluhan urgent Operasional yang masih aktif hingga {{T1.scope.end_date}}. Rincian laporan belum diambil.",
+                    "sources": ["T1"],
+                }
+            ]
+        },
+    )
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(
+        state,
+        "Apakah ada issue Operasional yang perlu segera ditindaklanjuti",
+        SESSION,
+        TODAY,
+        fake,
+    )
+    assert "Ada 2 keluhan" in answer and "Rincian laporan belum diambil" in answer
+    assert state.reply_kind == "analysis" and len(state.analysis_sources) == 1
+    assert [trace["tool"] for trace in state.tool_trace] == ["backlog_age"]
+    assert "evidence_limitation" in fake.final_data
+    assert fake.final_data["results"][0]["data"]["scope"]["period"] == "all"
+    with sqlite3.connect(operational_engine.batch.audit.path) as connection:
+        rejection = json.loads(
+            connection.execute(
+                "SELECT metadata FROM events WHERE event='analysis_tool_rejected'"
+            ).fetchone()[0]
+        )
+        started = json.loads(
+            connection.execute(
+                "SELECT metadata FROM events WHERE event='analysis_started'"
+            ).fetchone()[0]
+        )
+    assert rejection["reason"] == reason and rejection["tool"] == "complaint_examples"
+    assert len(started["planner_digest"]) == 64
+
+
+def test_invalid_dates_without_evidence_do_not_claim_analysis_succeeded(operational_engine):
+    fake = FakeClient([call("backlog_age", args(period="all", end="2026-10-11"))])
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(state, "Ada keluhan urgent?", SESSION, TODAY, fake)
+    assert "belum" in answer and not state.analysis_sources and not state.tool_trace
+    assert not hasattr(fake, "final_data")
+
+
+def test_backlog_summary_distinguishes_total_active_from_urgent(operational_engine):
+    class Unavailable(FakeClient):
+        def structured(self, *arguments, **kwargs):
+            raise ModelUnavailable("provider_unavailable")
+
+    scope = args(
+        period="all",
+        category="Operasional",
+        status="Active",
+        urgent_only=False,
+        limit=5,
+        answer_ready=True,
+    )
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(
+        state, "Ada issue Operasional?", SESSION, TODAY, Unavailable([call("backlog_age", scope)])
+    )
+    assert "Ada 3 keluhan negatif kategori Operasional yang masih aktif" in answer
+    assert "Di antaranya 2 keluhan ditandai urgent" in answer
+    assert "Ada 3 keluhan negatif kategori Operasional yang ditandai urgent" not in answer
+    assert "[T1]" in answer and "{{" not in answer
+
+
+@pytest.mark.parametrize("status", ["Active", "All", "Open"])
+def test_premature_ready_urgent_backlog_collects_examples_with_same_effective_filters(
+    operational_engine, status
+):
+    scope = args(
+        period="all",
+        category="Operasional",
+        status=status,
+        source="X",
+        urgent_only=True,
+        limit=5,
+        answer_ready=True,
+    )
+    fake = FakeClient([call("backlog_age", scope)])
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(
+        state,
+        "Apakah ada issue Operasional yang perlu segera ditindaklanjuti?",
+        SESSION,
+        TODAY,
+        fake,
+    )
+    assert state.reply_kind == "analysis" and "[T1]" in answer
+    assert [trace["tool"] for trace in state.tool_trace] == ["backlog_age", "complaint_examples"]
+    assert len(fake.final_data["results"]) == 2
+    backlog, examples = [report["data"] for report in state.analysis_sources]
+    assert backlog["total"] == examples["total"]
+    assert examples["scope"]["status"] == ("Active" if status == "All" else status)
+    assert examples["scope"]["source"] == "X" and examples["scope"]["period"] == "all"
+    assert all(example["status"] != "Resolved" for example in examples["examples"])
+    assert not state.selected_ids and state.proposal is None
+
+
+@pytest.mark.parametrize(
+    "paragraph",
+    [
+        {"text": 'Nasabah mengatakan "Petugas sudah mengembalikan dana".', "sources": ["T1"]},
+        {"text": "Ada {{T1.nonexistent}} keluhan.", "sources": ["T1"]},
+        {"text": "Ada keluhan aktif.", "sources": ["T99"]},
+        {"text": "Penyebabnya adalah server rusak.", "sources": ["T1"]},
+        {"text": "Hubungi test@example.com.", "sources": ["T1"]},
+        {"text": "Ada keluhan aktif.", "sources": []},
+    ],
+)
+def test_rejected_model_answer_always_can_use_validated_backlog_facts(
+    operational_engine, paragraph
+):
+    scope = args(
+        period="all",
+        category="Operasional",
+        status="Active",
+        urgent_only=True,
+        limit=5,
+        answer_ready=True,
+    )
+    fake = FakeClient([call("backlog_age", scope)], {"paragraphs": [paragraph]})
+    state = CompanionState()
+    answer = operational_engine.analysis.answer(
+        state,
+        "Apakah ada issue Operasional yang perlu segera ditindaklanjuti?",
+        SESSION,
+        TODAY,
+        fake,
+    )
+    assert "Ada 2 keluhan negatif kategori Operasional" in answer and "[T1]" in answer
+    assert "belum dapat" not in answer and "test@example.com" not in answer
+    assert "mengembalikan dana" not in answer and "server rusak" not in answer
+    assert len(state.analysis_sources) == 2
+    with sqlite3.connect(operational_engine.batch.audit.path) as connection:
+        assert (
+            connection.execute(
+                "SELECT count(*) FROM events WHERE event='analysis_evidence_summary'"
+            ).fetchone()[0]
+            == 1
+        )
+
+
 def test_daily_series_has_zero_days_and_no_false_incident(engine):
     result = tools(engine).execute("daily_trend", args(), "T1")
     assert len(result["days"]) == 7 and result["days"][0]["count"] == 0
@@ -187,6 +571,7 @@ def test_examples_are_author_free_and_explicit_selection_binds_current_version(e
     api = tools(engine, "Urai keluhan QRIS 7 hari terakhir")
     report = api.execute("complaint_examples", args(keyword="QRIS", limit=5), "T1")
     assert "PRIVATE_AUTHOR" not in json.dumps(report) and "a1" not in json.dumps(report)
+    assert report["returned"] == len(report["examples"]) == 3
     state = CompanionState(analysis_evidence=api.evidence)
     assert not state.selected_ids
     engine.select_evidence(state, "T1.E1", SESSION)
@@ -203,7 +588,7 @@ def test_examples_are_author_free_and_explicit_selection_binds_current_version(e
 def test_entire_source_screened_before_truncation(engine, suffix):
     with engine.repository.database.transaction() as connection:
         connection.execute(
-            "UPDATE suara_nasabah SET content=? WHERE suara_nasabah_id='a1'",
+            "UPDATE suara_nasabah SET masked_content=? WHERE suara_nasabah_id='a1'",
             ("QRIS " + "gagal " * 1300 + suffix,),
         )
     result = tools(engine, "Urai QRIS 7 hari terakhir").execute(
@@ -291,6 +676,95 @@ def test_natural_numeric_values_must_exist_in_cited_sources_and_quotes_are_verba
     ]:
         with pytest.raises(GuardrailError):
             render_answer({"paragraphs": [{"text": text, "sources": ["T1"]}]}, [report])
+
+
+def test_numbers_in_verbatim_quotes_are_reported_text_not_aggregate_facts():
+    report = {
+        "id": "T1",
+        "data": {
+            "total": 107,
+            "returned": 1,
+            "examples": [{"excerpt": "Setoran Rp 500.000 belum tercatat setelah 3 hari."}],
+        },
+    }
+    prose = 'Contoh laporan: "Setoran Rp 500.000 belum tercatat setelah 3 hari."'
+    answer = render_answer({"paragraphs": [{"text": prose, "sources": ["T1"]}]}, [report])
+    assert "500.000" in answer and "3 hari" in answer
+    with pytest.raises(GuardrailError):
+        render_answer(
+            {"paragraphs": [{"text": prose + " Ada 500.000 keluhan.", "sources": ["T1"]}]}, [report]
+        )
+    with pytest.raises(GuardrailError):
+        render_answer(
+            {
+                "paragraphs": [
+                    {
+                        "text": 'Nasabah mengatakan "Setoran Rp 600.000 belum tercatat".',
+                        "sources": ["T1"],
+                    }
+                ]
+            },
+            [report],
+        )
+
+
+def test_list_ordinals_do_not_supply_unverified_count_claims():
+    report = {"id": "T1", "data": {"total": 107, "returned": 5}}
+    result = {"paragraphs": [{"text": "1. Berikut 5 contoh dari 107 laporan.", "sources": ["T1"]}]}
+    assert "5 contoh" in render_answer(result, [report])
+    result["paragraphs"][0]["text"] = "1. Ada 999 keluhan."
+    with pytest.raises(GuardrailError):
+        render_answer(result, [report])
+
+
+@pytest.mark.parametrize("failure", ["number", "provider"])
+def test_example_request_has_its_own_validated_fallback(operational_engine, failure):
+    class FailedExampleAnswer(FakeClient):
+        def structured(self, *arguments, **kwargs):
+            if failure == "provider":
+                raise ModelUnavailable("provider_unavailable")
+            return {"paragraphs": [{"text": "Ada 999 keluhan.", "sources": ["T1"]}]}, {"tokens": 20}
+
+    scope = args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5)
+    state = CompanionState(analysis_scope=scope, analysis_question="Ada issue Operasional urgent?")
+    fake = FailedExampleAnswer([call("complaint_examples", {**scope, "answer_ready": True})])
+    answer = operational_engine.analysis.answer(
+        state,
+        "Tampilkan 5 contoh keluhan dari issue Operasional urgent yang tadi.",
+        SESSION,
+        TODAY,
+        fake,
+    )
+    assert "Berikut 2 contoh" in answer and "[T1]" in answer
+    assert "Setoran belum tercatat." in answer and "QRIS gagal, saldo terpotong." in answer
+    assert "Escalated" in answer and "Open" in answer
+    assert "999" not in answer and "belum dapat" not in answer
+    assert len(state.analysis_sources) == 1 and len(state.analysis_evidence) == 2
+    assert not state.selected_ids and state.proposal is None
+
+
+def test_example_count_differs_from_total_matching_reports(operational_engine):
+    operational_engine.repository.insert(
+        [
+            VoiceRecord(
+                f"sample-{index}",
+                f"Keluhan layanan urutan {index}.",
+                "2026-10-10",
+                "X",
+                "Negative",
+                is_Operasional=1,
+                is_Urgent=1,
+                masked_content=f"Keluhan layanan urutan {index}.",
+            )
+            for index in range(7)
+        ]
+    )
+    report = tools(operational_engine).execute(
+        "complaint_examples",
+        args(period="all", category="Operasional", status="Active", urgent_only=True, limit=5),
+        "T1",
+    )
+    assert report["total"] == 9 and report["returned"] == 5 and len(report["examples"]) == 5
 
 
 @pytest.mark.parametrize(

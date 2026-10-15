@@ -42,7 +42,7 @@ class ScriptedModel:
 
 
 @pytest.fixture
-def conversation(tmp_path):
+def conversation(tmp_path, synthetic_masks):
     services = create_services(
         Settings(
             tmp_path / "voices.db",
@@ -57,6 +57,7 @@ def conversation(tmp_path):
             VoiceRecord("three", "QRIS lancar.", "2026-10-12", "PlayStore", "Positive"),
         ]
     )
+    synthetic_masks(services.repository)
     return services.conversation
 
 
@@ -235,9 +236,21 @@ def test_failed_model_output_does_not_silently_show_success_template(conversatio
     assert state.analysis_sources[0]["tool"] == "complaint_workflow"
 
 
-def test_qwen_model_payload_supports_tools_and_separate_strict_output(monkeypatch):
-    monkeypatch.delenv("BNIVOICE360_AGENT_MODEL", raising=False)
-    assert Settings().agent_model == "qwen/qwen3.8-27b"
+@pytest.mark.parametrize(
+    "override,expected_model,reasoning_effort",
+    [
+        (None, "openai/gpt-oss-20b", "low"),
+        ("qwen/qwen3.8-27b", "qwen/qwen3.8-27b", "none"),
+    ],
+)
+def test_model_payload_supports_tools_and_separate_strict_output(
+    monkeypatch, override, expected_model, reasoning_effort
+):
+    if override is None:
+        monkeypatch.delenv("BNIVOICE360_AGENT_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("BNIVOICE360_AGENT_MODEL", override)
+    assert Settings().agent_model == expected_model
     client = GroqClient("synthetic", Settings().agent_model)
     requests = []
 
@@ -248,7 +261,7 @@ def test_qwen_model_payload_supports_tools_and_separate_strict_output(monkeypatc
     monkeypatch.setattr(client, "_request", request)
     client.choose_tools([], [], deadline=time.monotonic() + 5)
     client.structured("system", {}, {"type": "object"}, "reply")
-    assert requests[0]["reasoning_effort"] == requests[1]["reasoning_effort"] == "none"
+    assert requests[0]["reasoning_effort"] == requests[1]["reasoning_effort"] == reasoning_effort
     assert "tools" in requests[0] and "response_format" not in requests[0]
     assert requests[1]["response_format"]["json_schema"]["strict"]
     assert "tools" not in requests[1]

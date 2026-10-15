@@ -74,6 +74,7 @@ class CompanionState:
     analysis_evidence: dict = field(default_factory=dict)
     reply_kind: str = "workflow"
     recent_turns: list[dict] = field(default_factory=list)
+    remote_content_version: int = 0
 
     @property
     def visible_ids(self) -> tuple[str, ...]:

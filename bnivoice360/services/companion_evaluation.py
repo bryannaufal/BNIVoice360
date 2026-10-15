@@ -82,6 +82,7 @@ class CompanionEvaluation:
                     "companion_intent.py",
                     "companion_state.py",
                     "companion_draft.py",
+                    "remote_content.py",
                     "analysis_agent.py",
                     "analysis_tools.py",
                     "evaluation_suite.py",
@@ -183,17 +184,32 @@ class CompanionEvaluation:
                                 Role.MANAGER.value,
                                 today=today,
                             )
-                        elif mode == "Local" and case.case_id == "analysis":
+                        elif mode == "Local" and case.case_id in {"analysis", "urgent_operational"}:
                             from bnivoice360.services.analysis_tools import AnalysisTools
 
-                            data = AnalysisTools(conversation.batch, today, step, {}, {}).execute(
-                                "volume_breakdown", {"period": "7d", "group_by": "topic"}, "T1"
-                            )
+                            analysis = AnalysisTools(conversation.batch, today, step, {}, {})
+                            if case.case_id == "urgent_operational":
+                                scope = {
+                                    "period": "all",
+                                    "category": "Operasional",
+                                    "status": "Active",
+                                    "sentiment": "Negative",
+                                    "urgent_only": True,
+                                    "limit": 5,
+                                }
+                                plan = [("backlog_age", scope), ("complaint_examples", scope)]
+                            else:
+                                plan = [("volume_breakdown", {"period": "7d", "group_by": "topic"})]
                             state.analysis_sources = [
-                                {"id": "T1", "tool": "volume_breakdown", "data": data}
+                                {
+                                    "id": f"T{index}",
+                                    "tool": name,
+                                    "data": analysis.execute(name, scope, f"T{index}"),
+                                }
+                                for index, (name, scope) in enumerate(plan, 1)
                             ]
                             state.reply_kind = "analysis"
-                            reply = f"Tools lokal menghitung {data['total']} keluhan."
+                            reply = f"Tools lokal menghitung {state.analysis_sources[0]['data']['total']} keluhan."
                         else:
                             reply = conversation.handle(
                                 state,
@@ -303,6 +319,43 @@ class CompanionEvaluation:
                         if "total" in source["data"]
                     ),
                     None,
+                ),
+                "analysis_tools": [source["tool"] for source in state.analysis_sources],
+                "analysis_scopes_match": bool(state.analysis_sources)
+                and all(
+                    source["data"].get("scope") == state.analysis_sources[0]["data"].get("scope")
+                    for source in state.analysis_sources
+                ),
+                "analysis_statuses": next(
+                    (
+                        source["data"]["status_counts"]
+                        for source in state.analysis_sources
+                        if "status_counts" in source["data"]
+                    ),
+                    None,
+                ),
+                "analysis_period": next(
+                    (
+                        source["data"]["scope"]["period"]
+                        for source in state.analysis_sources
+                        if "scope" in source["data"]
+                    ),
+                    None,
+                ),
+                "analysis_urgent_only": next(
+                    (
+                        source["data"]["scope"]["urgent_only"]
+                        for source in state.analysis_sources
+                        if "scope" in source["data"]
+                    ),
+                    None,
+                ),
+                "example_statuses": sorted(
+                    {
+                        example["status"]
+                        for source in state.analysis_sources
+                        for example in source["data"].get("examples", [])
+                    }
                 ),
                 "tokens": sum(known_tokens) if known_tokens else None,
                 "model_calls": len(calls),

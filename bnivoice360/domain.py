@@ -37,6 +37,7 @@ class VoiceRecord:
     topic_cluster: str | None = None
     topic_id: int | None = None
     author_id_or_name: str | None = None
+    masked_content: str | None = None
 
 
 @dataclass(frozen=True)

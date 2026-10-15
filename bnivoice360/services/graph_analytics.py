@@ -10,13 +10,14 @@ import pandas as pd
 from bnivoice360.domain import IssueFilters
 from bnivoice360.services.agent.audit import fingerprint
 from bnivoice360.services.agent.groq_client import GroqClient, ModelUnavailable
-from bnivoice360.services.agent.guardrails import TOXIC, GuardrailError, screen_input
+from bnivoice360.services.agent.guardrails import GuardrailError
 from bnivoice360.services.agent.retrieval import load_voice_vectors
 from bnivoice360.services.agent.telemetry import AuditedModelClient
 from bnivoice360.services.agent.workflow import ReviewRequired, _rows
 from bnivoice360.services.analysis_agent import ANSWER_PROMPT, answer_schema, render_answer
 from bnivoice360.services.analysis_tools import safe_data
 from bnivoice360.services.analytics import category_labels, filter_issues
+from bnivoice360.services.remote_content import masked_text
 
 EDGE_COLUMNS = ["source_id", "target_id", "similarity"]
 GROUP_COLUMNS = [
@@ -273,9 +274,7 @@ def explain_group(batch, network, group_id, session_id, role, api_key=""):
         try:
             for _, row in members.iterrows():
                 try:
-                    text = screen_input(str(row["content"]))
-                    if TOXIC.search(text):
-                        raise GuardrailError("unsafe_source_text")
+                    text = masked_text(row)
                 except GuardrailError:
                     continue
                 reports.append(

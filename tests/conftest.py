@@ -20,6 +20,17 @@ def isolated_initialization(monkeypatch):
 
 
 @pytest.fixture
+def synthetic_masks():
+    """Explicit masks for existing synthetic fixtures; never used by application ingestion."""
+
+    def fill(repository):
+        with repository.database.transaction() as connection:
+            connection.execute("UPDATE suara_nasabah SET masked_content=content")
+
+    return fill
+
+
+@pytest.fixture
 def services(tmp_path):
     return create_services(Settings(tmp_path / "voices.db", seed_initial_data=False))
 

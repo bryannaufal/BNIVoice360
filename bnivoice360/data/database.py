@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS topic_detail (
 CREATE TABLE IF NOT EXISTS suara_nasabah (
     suara_nasabah_id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
+    masked_content TEXT,
     date_posted DATETIME,
     source TEXT NOT NULL,
     sentiment TEXT,
@@ -104,8 +105,8 @@ class Database:
                         """INSERT INTO suara_nasabah
                         (suara_nasabah_id, content, date_posted, source, sentiment, is_IT,
                          is_Bisnis, is_Operasional, is_Urgent, escalation_status, topic_id,
-                         author_id_or_name, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                         author_id_or_name, created_at, masked_content)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         tuple(
                             row[key]
                             for key in (
@@ -120,10 +121,21 @@ class Database:
                                 "is_Urgent",
                             )
                         )
-                        + (status, topic_id, values.get("author_id_or_name"), row["created_at"]),
+                        + (
+                            status,
+                            topic_id,
+                            values.get("author_id_or_name"),
+                            row["created_at"],
+                            values.get("masked_content"),
+                        ),
                     )
                 connection.execute("DROP TABLE legacy_voices")
-            connection.execute("PRAGMA user_version=3")
+            current_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(suara_nasabah)")
+            }
+            if "masked_content" not in current_columns:
+                connection.execute("ALTER TABLE suara_nasabah ADD COLUMN masked_content TEXT")
+            connection.execute("PRAGMA user_version=4")
 
     def backup(self) -> Path:
         """SQLite's backup API includes committed WAL data as well."""

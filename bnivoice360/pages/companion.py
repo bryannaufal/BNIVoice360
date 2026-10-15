@@ -67,8 +67,8 @@ def render(services: AppServices) -> None:
             "\n- Revisi draft agar lebih singkat dan formal."
         )
     st.caption(
-        "Masking PII belum aktif. Groq dapat memproses arahan dan cuplikan keluhan; "
-        "author tidak disertakan, tetapi nama/alamat dalam teks masih mungkin terkirim."
+        "Cuplikan keluhan yang dikirim ke Groq menggunakan masked_content dari sumber data. "
+        "Arahan petugas tetap diperiksa sebelum dikirim."
     )
     if not api_key:
         st.info(

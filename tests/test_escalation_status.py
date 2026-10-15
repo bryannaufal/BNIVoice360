@@ -153,7 +153,13 @@ def test_two_table_binary_migration_preserves_topics_authors_and_backup(tmp_path
     assert rows["created_at"].eq("2026-01-01").all()
     with database.transaction() as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM suara_nasabah WHERE masked_content IS NOT NULL"
+            ).fetchone()[0]
+            == 0
+        )
     backups = list(tmp_path.glob("binary.backup-*.db"))
     assert len(backups) == 1
     with sqlite3.connect(backups[0]) as backup:

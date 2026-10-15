@@ -1,8 +1,8 @@
 """Explicit conversation state machine with typed search, evidence, and approval boundaries."""
 
+import time
 from dataclasses import replace
 from datetime import date, datetime, timedelta
-import time
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -28,6 +28,7 @@ from bnivoice360.services.companion_intent import (
     validate_schema,
 )
 from bnivoice360.services.companion_state import CompanionState, ComplaintQuery, Stage
+from bnivoice360.services.remote_content import masked_text
 
 HELP = (
     "Saya bisa membandingkan tren keluhan, melihat perbedaan kanal, menelusuri backlog, "
@@ -117,10 +118,14 @@ class CompanionConversation:
         visible = []
         if state.visible_ids:
             for _, row in self.visible_rows(state).iterrows():
+                try:
+                    excerpt = masked_text(row)[:300]
+                except GuardrailError:
+                    excerpt = "[cuplikan masked_content tidak tersedia]"
                 visible.append(
                     {
                         "number": state.result_ids.index(str(row["suara_nasabah_id"])) + 1,
-                        "excerpt": str(row["content"])[:300],
+                        "excerpt": excerpt,
                         "source": row["source"],
                         "status": row["escalation_status"],
                         "topic": row["topic_cluster"],
@@ -746,7 +751,10 @@ class CompanionConversation:
                 rows = self.visible_rows(state)
                 found = tuple(
                     rows.loc[
-                        rows["content"].str.contains(match_phrase, case=False, regex=False),
+                        rows["content"].str.contains(match_phrase, case=False, regex=False)
+                        | rows["masked_content"].str.contains(
+                            match_phrase, case=False, regex=False, na=False
+                        ),
                         "suara_nasabah_id",
                     ].astype(str)
                 )

@@ -1,13 +1,13 @@
 """Versioned scenarios and a deterministic provider substitute; never use operational feedback."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 
 from bnivoice360.domain import VoiceRecord
 from bnivoice360.services.companion_intent import validate_schema
 
-SUITE_VERSION = "companion-v2-llm-tools"
+SUITE_VERSION = "companion-v2-urgent-evidence"
 
 
 @dataclass(frozen=True)
@@ -24,7 +24,7 @@ CASES = (
         "existence",
         "Pertanyaan keberadaan menawarkan detail",
         "Intent & pencarian",
-        ("Apakah ada issue terkait wondr yang perlu segera ditindaklanjuti?",),
+        ("Apakah ada keluhan wondr yang urgent?",),
         {
             "stage": "offer",
             "total": 2,
@@ -176,6 +176,24 @@ CASES = (
         ("Berapa keluhan negatif 7 hari terakhir?",),
         {"reply_kind": "analysis", "analysis_total": 4, "status_unchanged": True},
     ),
+    EvaluationCase(
+        "urgent_operational",
+        "Prioritas Operasional memakai backlog dan contoh dengan cakupan aktif yang sama",
+        "Analisis",
+        ("Apakah ada issue Operasional yang perlu segera ditindaklanjuti",),
+        {
+            "reply_kind": "analysis",
+            "analysis_total": 2,
+            "analysis_tools": ["backlog_age", "complaint_examples"],
+            "analysis_statuses": {"Open": 1, "Escalated": 1, "Resolved": 0},
+            "analysis_period": "all",
+            "analysis_urgent_only": True,
+            "analysis_scopes_match": True,
+            "example_statuses": ["Escalated", "Open"],
+            "status_unchanged": True,
+            "has_proposal": False,
+        },
+    ),
 )
 
 
@@ -183,7 +201,7 @@ def fixture_records(today: date) -> list[VoiceRecord]:
     def day(offset):
         return (today - timedelta(days=offset)).isoformat()
 
-    return [
+    records = [
         VoiceRecord(
             "E001",
             "wondr gagal login setelah memasukkan OTP. Sudah mencoba kembali tetapi tetap gagal.",
@@ -204,7 +222,7 @@ def fixture_records(today: date) -> list[VoiceRecord]:
             "Negative",
             1,
             0,
-            0,
+            1,
             1,
             "Escalated",
             "Login wondr",
@@ -253,16 +271,18 @@ def fixture_records(today: date) -> list[VoiceRecord]:
             "Negative",
             1,
             0,
-            0,
+            1,
             1,
             topic_cluster="Login wondr",
         ),
     ]
 
+    return [replace(record, masked_content=record.content) for record in records]
+
 
 # Synthetic scenario plans only. These exact fixtures are never a production input router.
 SCENARIO_PLANS = {
-    "Apakah ada issue terkait wondr yang perlu segera ditindaklanjuti?": {
+    "Apakah ada keluhan wondr yang urgent?": {
         "action": "exists",
         "keyword": "wondr",
         "urgent_only": True,
@@ -378,10 +398,22 @@ class EvaluationMockClient:
         return result, {"tokens": 0, "duration_ms": 0}
 
     def choose_tools(self, messages, definitions, **kwargs):
-        if messages[-1]["role"] == "tool":
-            return {"tool_calls": []}, {"tokens": 0}
         question = json.loads(messages[1]["content"])["question"]
-        if question in SCENARIO_PLANS:
+        if question == "Apakah ada issue Operasional yang perlu segera ditindaklanjuti":
+            last_call = messages[-1]["role"] == "tool"
+            name = "complaint_examples" if last_call else "backlog_age"
+            arguments = {
+                "period": "all",
+                "category": "Operasional",
+                "status": "Active",
+                "sentiment": "Negative",
+                "urgent_only": True,
+                "limit": 5,
+                "answer_ready": last_call,
+            }
+        elif messages[-1]["role"] == "tool":
+            return {"tool_calls": []}, {"tokens": 0}
+        elif question in SCENARIO_PLANS:
             name, arguments = "complaint_workflow", SCENARIO_PLANS[question]
         elif question == "Berapa keluhan negatif 7 hari terakhir?":
             name, arguments = (

@@ -93,6 +93,7 @@ class IngestionService:
             suara_nasabah_id=nullable_text(row.get("suara_nasabah_id"))
             or f"VOC-{uuid.uuid4().hex[:12].upper()}",
             content=content,
+            masked_content=nullable_text(row.get("masked_content")),
             date_posted=posted.isoformat(),
             source=source,
             sentiment=sentiment,

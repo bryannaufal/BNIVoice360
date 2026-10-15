@@ -174,8 +174,8 @@ Clicking a node opens evidence without selecting it for escalation. Group summar
 Open count, Open count, then oldest Open posting date. Posting age is not time in status or SLA.
 Department flags indicate relevance, not assigned ownership; channel coverage is not a unique
 customer count. **Jelaskan kelompok** provides local statistics, or a validated Groq explanation
-using at most five screened examples when configured. Full text, authors and ticket identifiers
-are not sent as provider metadata; heuristic text screening still does not guarantee PII removal.
+using at most five screened examples from `masked_content` when configured. Original complaint text,
+authors and ticket identifiers are excluded from provider evidence.
 Explanation calls are explicitly triggered and metadata-audited.
 
 Select individual Open ticket checkboxes and click **Lanjutkan ke Companion** to prepare a draft.
@@ -305,7 +305,8 @@ impact remain unconfirmed; the petugas' request and examination remain verbatim.
 document, revise through the form, or ask **revisi draft agar lebih singkat dan formal**. Each revision
 cancels the old preview and requires fresh approval. Drafting does not send messages or change status.
 Rejected/failed AI output uses a basic local summary while preserving every full original complaint.
-This update does not add personal-information masking; existing remote screening remains in place.
+Remote evidence uses the source-provided `masked_content`; full original complaints are assembled only
+in the local document. Missing/blank masks block remote draft generation instead of substituting originals.
 
 To change status, check approval and click **Konfirmasi eskalasi N tiket**. Only Open tickets can be
 committed; Escalated/Resolved tickets can produce a document without a status action. Approval binds
@@ -316,10 +317,10 @@ Audit failure or concurrent edits abort the whole batch. Repeated submission doe
 
 Companion uses the existing Groq key automatically. Supported secret layouts: `GROQ_API_KEY = "..."`,
 `GROQ = "..."`, or `[groq]` with `api_key = "..."`. Environment `GROQ_API_KEY` takes precedence.
-Default model: `qwen/qwen3.8-27b`; override with `BNIVOICE360_AGENT_MODEL`. Keys are never saved in history or session state.
-Qwen requests use instruct mode (`reasoning_effort="none"`) and a separate strict JSON-schema response after tool execution.
-See [Groq's Qwen documentation](https://console.groq.com/docs/model/qwen/qwen3.8-27b) and
-[structured output support](https://console.groq.com/docs/structured-outputs).
+Default model: `openai/gpt-oss-20b`; override with `BNIVOICE360_AGENT_MODEL`. Keys are never saved in history or session state.
+GPT-OSS requests use `reasoning_effort="low"` and a separate strict JSON-schema response after tool execution.
+Optional Qwen overrides continue to use instruct mode (`reasoning_effort="none"`).
+See Groq's [structured output support](https://console.groq.com/docs/structured-outputs).
 
 Every chat input goes directly to the LLM planner after security screening. There is no regex intent router,
 keyword allowlist, or regex date/filter extraction. The model chooses analysis tools or `complaint_workflow`
@@ -330,16 +331,44 @@ The model has no commit tool or arbitrary SQL/shell/web tool. Only explicit UI a
 
 Chat replies, including search results, clarifications and refusals, are written by the LLM from tool results,
 with validated citations and numbers. Internal tool outcomes and downloadable draft sections retain their
-structured format. A failed provider or rejected response produces an explicit error with inspectable tool
-results; it does not silently replace a normal chat answer with a success template.
+structured format. For backlog questions, a provider failure or any rejected generated answer can
+use a locally validated summary of the backlog's counts, topics and posting age, distinguishing total active
+complaints from urgent complaints. This summary does
+not invent report details or actions; the audit retains the failure and records `analysis_evidence_summary`.
+Example-only requests also have a validated fallback that displays the screened excerpts with their
+posting date, topic, source and status. `complaint_examples.total` counts all matching reports;
+`returned` counts the retrieved examples. Exact quoted customer text is checked against its source before
+numeric validation; its reported amounts/durations are not treated as computed population statistics.
+Other failed answers produce an explicit error with inspectable tool results.
+
+For questions such as **Apakah ada issue Operasional yang perlu segera ditindaklanjuti**, the planner is
+instructed to use `backlog_age` and then `complaint_examples` with matching filters: category Operasional,
+negative sentiment, urgent only, and `status: Active` (Open plus Escalated, excluding Resolved). Without
+an explicit period, both read all available posting dates so old active urgent reports remain visible.
+Explicit user dates and filters take precedence. The backlog already includes topic counts, so a second
+topic `volume_breakdown` is unnecessary. Empty backlogs need no examples. The final evidence call can
+set `answer_ready: true` to proceed directly to answer generation without another planner request.
+If the model prematurely marks a nonempty urgent backlog ready, the application collects
+`complaint_examples` from the same effective filters before writing the answer. Backlog `All` becomes
+`Active` for examples to preserve the same Open/Escalated population; empty backlogs need no examples.
+These are model instructions and typed tool capabilities, not a keyword router that rewrites arguments.
+Named periods require null/omitted `start` and `end`; only `period: custom` accepts explicit dates.
+If a later analysis call has invalid date arguments after evidence was collected, that call is rejected
+without changing its filters and the answer uses the successful results with their actual scope and limits.
+The audit records `analysis_tool_rejected` and a planner prompt digest to distinguish loaded versions.
 
 Set `$env:BNIVOICE360_COMPANION_REMOTE_ENABLED = "0"` for offline operation. Without Groq, free-text chat
 is disabled; typed search/period buttons, selection, draft forms, basic local drafts and approval remain usable.
 This setting is separate from the Issue Analytics batch panel's remote-AI setting.
 
-Chat allows at most six sequential planning calls, a 60-second deadline and 20,000 reported tokens. Final
+Chat allows at most six sequential planning calls and a 60-second deadline, with a target of 20,000 reported
+tokens. Planning reserves 8,000 tokens and the last 20 seconds for the final answer, estimates the next
+planner request from observed usage and context growth, and stops collecting when that reserve is needed.
+The final request contains the evidence once rather than duplicating it as a separate facts map. Final
 answers use a separate strict JSON response; invalid formatting or unsupported numbers may be retried once
-within that budget. Rejected prose is never displayed or copied into retry prompts. Requests have at most
+if budget remains. Actual usage is known after each request: a valid final answer is retained if usage
+overshoots the estimate, and `analysis_budget_overrun` is audited. Rejected prose is never displayed or
+copied into retry prompts. Requests have at most
 two HTTP attempts, 1,800 completion tokens (900 for tool selection), a 15-second socket timeout and a
 40-second per-response deadline. Tool calling and strict final responses are separate, as described in
 [Groq's tool-use documentation](https://console.groq.com/docs/tool-use/overview).
@@ -355,8 +384,13 @@ answers/drafts, authors and API keys are excluded. Provider/tool failures produc
 successful screened tool results remain inspectable. Audit failure prevents a success response.
 The role selector is not authentication.
 
-**PII masking remains deferred.** Author metadata and real ticket IDs are excluded from Groq payloads.
-Common structured PII/injection checks are heuristic; names and addresses may still be present.
+**External complaint text uses `masked_content` from df_Clean.** Import/seed retain `raw_content` as
+local `content` and store `masked_content` separately. Analytics examples, visible conversational context,
+Companion drafts, batch-agent drafts and graph explanations all screen the mask before truncation.
+Missing/blank masks are omitted or cause a local draft fallback; original text is never a substitute.
+Old conversational turns are cleared from model context once when upgrading to this policy.
+The application consumes source masks; it does not generate them. Author metadata and real ticket IDs
+are excluded from Groq payloads. Operator messages/notes retain their existing screening.
 Exact citations prevent invented quotes, not incorrect real-world claims. Review drafts before use.
 The boundaries follow [Groq structured output documentation](https://console.groq.com/docs/structured-outputs)
 and [OWASP agent security guidance](https://cheatsheetseries.owasp.org/cheatsheets/AI_Agent_Security_Cheat_Sheet.html).
@@ -366,6 +400,8 @@ and [OWASP agent security guidance](https://cheatsheetseries.owasp.org/cheatshee
 - **`ModuleNotFoundError`**: activate `.venv`, then run `python -m pip install -r requirements.txt` again.
 - **Port 8501 is busy**: run `streamlit run app.py --server.port 8502` and open <http://localhost:8502>.
 - **The page looks stale**: stop Streamlit with `Ctrl+C` and start it again.
+- **Refresh source masks without replacing tickets**: run `python -m bnivoice360.data.seed --refresh-masked-content`.
+  It updates only masks with matching `data_id` and original content, preserving statuses and reviewed fields.
 - **You need fresh source data**: stop Streamlit and run `python -m bnivoice360.data.seed --overwrite`; the command creates a database backup.
 
 For architecture details and extension recipes, read [docs/architecture.md](docs/architecture.md). For team conventions, read [CONTRIBUTING.md](CONTRIBUTING.md).

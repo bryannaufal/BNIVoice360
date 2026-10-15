@@ -6,6 +6,7 @@ from bnivoice360.services.agent.groq_client import ModelUnavailable
 from bnivoice360.services.agent.guardrails import TOXIC, GuardrailError, screen_input
 from bnivoice360.services.analysis_agent import render_answer
 from bnivoice360.services.companion_intent import object_schema, validate_schema
+from bnivoice360.services.remote_content import masked_text
 
 DRAFT_PROMPT = """Write a professional Indonesian escalation draft from the selected complaints only.
 Return summary and suggestions as arrays of paragraphs with text and sources (provided aliases).
@@ -41,8 +42,7 @@ def draft_prose(rows, state, client, audit, session_id):
         reports = []
         for alias, ticket in aliases.items():
             row = rows[ticket]
-            # Preserve existing remote screening; originals never pass through the model.
-            content = screen_input(row["content"])[:2000]
+            content = masked_text(row)[:2000]
             reports.append(
                 {
                     "id": alias,

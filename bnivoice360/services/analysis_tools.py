@@ -12,17 +12,28 @@ from bnivoice360.services.agent.retrieval import similar_voices
 from bnivoice360.services.agent.workflow import _rows
 from bnivoice360.services.analytics import assigned_topics, topic_assignment_counts
 from bnivoice360.services.companion_intent import object_schema, validate_schema
+from bnivoice360.services.remote_content import masked_text
 
 PERIODS = ["7d", "30d", "today", "this_week", "this_month", "all", "custom"]
 FILTER_PROPERTIES = {
     "period": {"type": "string", "enum": PERIODS},
-    "start": {"type": ["string", "null"]},
-    "end": {"type": ["string", "null"]},
+    "start": {
+        "type": ["string", "null"],
+        "description": "YYYY-MM-DD only when period is custom; otherwise null. Do not copy a result's start_date here for named periods.",
+    },
+    "end": {
+        "type": ["string", "null"],
+        "description": "YYYY-MM-DD only when period is custom; otherwise null. A result's end_date does not require an end argument.",
+    },
     "keyword": {"type": ["string", "null"]},
     "topic": {"type": ["string", "null"]},
     "category": {"type": ["string", "null"], "enum": [*CATEGORY_COLUMNS, None]},
     "source": {"type": ["string", "null"], "enum": [*SOURCES, None]},
-    "status": {"type": "string", "enum": ["All", *ESCALATION_STATUSES]},
+    "status": {
+        "type": "string",
+        "enum": ["All", "Active", *ESCALATION_STATUSES],
+        "description": "Active means Open or Escalated, excluding Resolved. All includes every status except in backlog_age.",
+    },
     "sentiment": {"type": "string", "enum": ["All", *SENTIMENTS]},
     "urgent_only": {"type": "boolean"},
 }
@@ -30,6 +41,14 @@ GROUPS = ["topic", "source", "category", "status", "sentiment"]
 
 
 def definition(name, description, properties):
+    if "period" in properties:
+        properties = {
+            **properties,
+            "answer_ready": {
+                "type": "boolean",
+                "description": "Set true when this call will collect the last evidence needed; write the final answer immediately after execution without another planner request.",
+            },
+        }
     schema = object_schema(properties)
     if "period" in properties:
         # Read filters have application-owned defaults; models need only provide overrides.
@@ -71,12 +90,12 @@ TOOL_DEFINITIONS = [
     ),
     definition(
         "backlog_age",
-        "Rank TOPICS by Open/Escalated complaint counts and oldest posting-age; also overall totals/median age. NOT time in status or SLA. All means both active statuses; default Open. No user period means all posting dates.",
+        "Rank TOPICS by Open/Escalated complaint counts and oldest posting-age; also overall totals/median age. NOT time in status or SLA. Active and All both mean Open plus Escalated. No user period means all posting dates. Includes topic counts, so another topic volume_breakdown is usually unnecessary.",
         {**FILTER_PROPERTIES, "limit": {"type": "integer"}},
     ),
     definition(
         "complaint_examples",
-        "Read recent representative excerpts (maximum five), with aliases and metadata. Samples do not establish causes or complete subtopic frequencies.",
+        "Read latest matching excerpts (maximum five), with aliases and metadata. Use status Active for Open plus Escalated, excluding Resolved. Match the preceding backlog's period and filters for follow-up evidence. Samples do not establish causes or complete subtopic frequencies.",
         {**FILTER_PROPERTIES, "limit": {"type": "integer"}},
     ),
     definition(
@@ -207,6 +226,9 @@ class AnalysisTools:
             ("topic", "topic_cluster"),
         ):
             value = args[parameter]
+            if parameter == "status" and value == "Active":
+                frame = frame.loc[frame[column].isin(["Open", "Escalated"])]
+                continue
             if value and value != "All":
                 frame = frame.loc[frame[column].eq(value)]
         if args["category"]:
@@ -282,9 +304,7 @@ class AnalysisTools:
             ["date_posted", "suara_nasabah_id"], ascending=[False, True]
         ).iterrows():
             try:
-                text = screen_input(str(row["content"]))
-                if TOXIC.search(text):
-                    raise GuardrailError("unsafe_source_text")
+                text = masked_text(row)
             except GuardrailError:
                 self.omitted_texts += 1
                 continue
@@ -436,7 +456,9 @@ class AnalysisTools:
                 raise GuardrailError("backlog_requires_active_status")
             active = frame.loc[
                 frame["escalation_status"].isin(
-                    ["Open", "Escalated"] if args["status"] == "All" else [args["status"]]
+                    ["Open", "Escalated"]
+                    if args["status"] in {"All", "Active"}
+                    else [args["status"]]
                 )
             ].copy()
             age = (pd.Timestamp(self.today) - active["date_posted"].dt.normalize()).dt.days
@@ -483,8 +505,10 @@ class AnalysisTools:
                 note="Umur sejak tanggal posting hingga tanggal analisis, bukan durasi Open/Escalated, waktu penyelesaian, atau pelanggaran SLA.",
             )
         elif name == "complaint_examples":
+            examples = self.examples(frame, reference, scope, args["limit"])
             result.update(
-                examples=self.examples(frame, reference, scope, args["limit"]),
+                examples=examples,
+                returned=len(examples),
                 omitted_unsafe_texts=self.omitted_texts,
                 note="Cuplikan terbaru yang lolos screening; bukan seluruh keluhan atau pengelompokan akar penyebab.",
             )
